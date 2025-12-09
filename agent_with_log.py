@@ -16,12 +16,16 @@ import copy
 import os
 from datetime import datetime
 import random
+import logging
 # from poolagent.pool import Pool as CuetipEnv, State as CuetipState
 # from poolagent import FunctionAgent
 
 from bayes_opt import BayesianOptimization, SequentialDomainReductionTransformer
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import Matern
+
+
+logger = logging.getLogger("evaluate")
 
 
 def analyze_shot_for_reward(shot: pt.System, last_state: dict, player_targets: list):
@@ -181,7 +185,7 @@ class BasicAgent(Agent):
         }
         self.enable_noise = False
         
-        print("BasicAgent (Smart, pooltool-native) 已初始化。")
+        logger.info("BasicAgent (Smart, pooltool-native) 已初始化。")
 
     
     def _create_optimizer(self, reward_function, seed):
@@ -231,7 +235,7 @@ class BasicAgent(Agent):
                 失败时返回随机动作
         """
         if balls is None:
-            print(f"[BasicAgent] Agent decision函数未收到balls关键信息，使用随机动作。")
+            logger.info("[BasicAgent] Agent decision函数未收到balls关键信息，使用随机动作。")
             return self._random_action()
         try:
             
@@ -241,7 +245,7 @@ class BasicAgent(Agent):
             remaining_own = [bid for bid in my_targets if balls[bid].state.s != 4]
             if len(remaining_own) == 0:
                 my_targets = ["8"]
-                print("[BasicAgent] 我的目标球已全部清空，自动切换目标为：8号球")
+                logger.info("[BasicAgent] 我的目标球已全部清空，自动切换目标为：8号球")
 
             # 1.动态创建“奖励函数” (Wrapper)
             # 贝叶斯优化器会调用此函数，并传入参数
@@ -287,7 +291,7 @@ class BasicAgent(Agent):
 
                 return score
 
-            print(f"[BasicAgent] 正在为 Player (targets: {my_targets}) 搜索最佳击球...")
+            logger.info("[BasicAgent] 正在为 Player (targets: %s) 搜索最佳击球...", my_targets)
             
             seed = np.random.randint(1e6)
             optimizer = self._create_optimizer(reward_fn_wrapper, seed)
@@ -301,7 +305,7 @@ class BasicAgent(Agent):
             best_score = best_result['target']
 
             if best_score < 10:
-                print(f"[BasicAgent] 未找到好的方案 (最高分: {best_score:.2f})。使用随机动作。")
+                logger.info("[BasicAgent] 未找到好的方案 (最高分: %.2f)。使用随机动作。", best_score)
                 return self._random_action()
             action = {
                 'V0': float(best_params['V0']),
@@ -311,15 +315,21 @@ class BasicAgent(Agent):
                 'b': float(best_params['b']),
             }
 
-            print(f"[BasicAgent] 决策 (得分: {best_score:.2f}): "
-                  f"V0={action['V0']:.2f}, phi={action['phi']:.2f}, "
-                  f"θ={action['theta']:.2f}, a={action['a']:.3f}, b={action['b']:.3f}")
+            logger.info(
+                "[BasicAgent] 决策 (得分: %.2f): V0=%.2f, phi=%.2f, θ=%.2f, a=%.3f, b=%.3f",
+                best_score,
+                action['V0'],
+                action['phi'],
+                action['theta'],
+                action['a'],
+                action['b'],
+            )
             return action
 
         except Exception as e:
-            print(f"[BasicAgent] 决策时发生严重错误，使用随机动作。原因: {e}")
+            logger.error("[BasicAgent] 决策时发生严重错误，使用随机动作。原因: %s", e)
             import traceback
-            traceback.print_exc()
+            logger.exception(e)
             return self._random_action()
 
 class NewAgent(Agent):
@@ -357,7 +367,7 @@ class MCTSAgent(Agent):
     """
     def __init__(self):
         super().__init__()
-        print("ImprovedMCTSAgent 已初始化 - 包含防守逻辑与微调瞄准")
+        logger.info("ImprovedMCTSAgent 已初始化 - 包含防守逻辑与微调瞄准")
 
     def _get_pockets(self, table):
         return table.pockets
@@ -455,7 +465,7 @@ class MCTSAgent(Agent):
         """
         防守策略：当没有好机会时，轻轻碰一下离得最近的球，避免犯规
         """
-        print("[MCTSAgent] 启动防守模式 (Safety Mode)")
+        logger.info("[MCTSAgent] 启动防守模式 (Safety Mode)")
         cue_pos = balls['cue'].state.rvw[0]
         min_dist = float('inf')
         best_target = None
@@ -482,7 +492,8 @@ class MCTSAgent(Agent):
         return self._random_action()
 
     def decision(self, balls=None, my_targets=None, table=None):
-        if balls is None: return self._random_action()
+        if balls is None:
+            return self._random_action()
         
         cue_ball = balls['cue']
         cue_pos = cue_ball.state.rvw[0]
@@ -510,7 +521,7 @@ class MCTSAgent(Agent):
 
         # 如果真的没有进攻机会，执行防守
         if not candidates:
-            print("[MCTSAgent] 无几何进攻线路，尝试防守。")
+            logger.info("[MCTSAgent] 无几何进攻线路，尝试防守。")
             return self._generate_safety_shot(balls, my_targets)
 
         # 排序：优先考虑切角小、距离近的球
@@ -519,9 +530,10 @@ class MCTSAgent(Agent):
 
         best_action = None
         best_score = -float('inf')
+        best_tag = ""
 
         # --- 2. 模拟与微调 (Simulation) ---
-        print(f"[MCTSAgent] 评估 {len(top_candidates)} 个进攻线路...")
+        logger.info("[MCTSAgent] 评估 %d 个进攻线路...", len(top_candidates))
         
         for cand in top_candidates:
             # 微调逻辑：不仅尝试理论角度，还要尝试左右偏差
@@ -549,19 +561,24 @@ class MCTSAgent(Agent):
                             best_action = {'V0': V0, 'phi': phi_try, 'theta': 0, 'a': 0, 'b': 0}
                             # 如果找到了必进球且走位不错的解，可以提前剪枝
                             if score > 120: 
-                                print(f"[MCTSAgent] 找到绝佳线路！(Score: {score:.1f})")
+                                logger.info("[MCTSAgent] 找到绝佳线路！(Score: %.1f)", score)
                                 return best_action
                                 
                     except Exception as e:
                         # 打印错误但不中断程序
-                        print(f"[MCTSAgent ERROR] Sim failed: {e}")
+                        logger.error("[MCTSAgent ERROR] Sim failed: %s", e)
                         continue
 
         if best_action is None:
-            print("[MCTSAgent] 模拟后未发现可行进攻方案，转为防守。")
+            logger.info("[MCTSAgent] 模拟后未发现可行进攻方案，转为防守。")
             return self._generate_safety_shot(balls, my_targets)
             
-        print(f"[MCTSAgent] 决策: V0={best_action['V0']:.1f}, phi={best_action['phi']:.1f} (ExpScore:{best_score:.1f})")
+        logger.info(
+            "[MCTSAgent] 决策: V0=%.1f, phi=%.1f (ExpScore:%.1f)",
+            best_action['V0'],
+            best_action['phi'],
+            best_score,
+        )
         return best_action
 
     def _random_action(self):
@@ -577,7 +594,7 @@ class BankAgent(Agent):
     """
     def __init__(self):
         super().__init__()
-        print("BankAgent 已初始化 - 具备翻袋攻击能力")
+        logger.info("BankAgent 已初始化 - 具备翻袋攻击能力")
 
     def _get_pockets(self, table):
         return table.pockets
@@ -695,7 +712,7 @@ class BankAgent(Agent):
 
     def _generate_safety_shot(self, balls, my_targets):
         """防守策略"""
-        print("[BankAgent] 启动防守模式 (Safety Mode)")
+        logger.info("[BankAgent] 启动防守模式 (Safety Mode)")
         cue_pos = balls['cue'].state.rvw[0]
         min_dist = float('inf')
         best_target = None
@@ -791,7 +808,7 @@ class BankAgent(Agent):
         candidates.extend(bank_candidates)
 
         if not candidates:
-            print("[BankAgent] 无几何进攻线路，尝试防守。")
+            logger.info("[BankAgent] 无几何进攻线路，尝试防守。")
             return self._generate_safety_shot(balls, my_targets)
 
         # --- 3. 混合排序 ---
@@ -804,7 +821,11 @@ class BankAgent(Agent):
         candidates.sort(key=sort_key)
         top_candidates = candidates[:6] # 扩大搜索范围以包含潜在的翻袋机会
 
-        print(f"[BankAgent] 评估 {len(top_candidates)} 个线路 (含 {sum(1 for c in top_candidates if c['type']=='bank')} 个翻袋)...")
+        logger.info(
+            "[BankAgent] 评估 %d 个线路 (含 %d 个翻袋)...",
+            len(top_candidates),
+            sum(1 for c in top_candidates if c['type']=='bank'),
+        )
 
         best_action = None
         best_score = -float('inf')
@@ -838,12 +859,10 @@ class BankAgent(Agent):
                         if score > best_score:
                             best_score = score
                             best_action = {'V0': V0, 'phi': phi_try, 'theta': 0, 'a': 0, 'b': 0}
-                            
-                            # 翻袋进球给予额外日志奖励 (方便观察)
-                            tag = "[翻袋!]" if cand['type'] == 'bank' else ""
+                            best_tag = "[翻袋!]" if cand['type'] == 'bank' else ""
                             # 提前剪枝：如果是高分直打直接返回，如果是翻袋也返回
                             if score > 120:
-                                print(f"[BankAgent] 找到绝佳{tag}线路！Score: {score:.1f}")
+                                logger.info("[BankAgent] 找到绝佳%s线路！Score: %.1f", best_tag, score)
                                 return best_action
                             
 
@@ -852,10 +871,16 @@ class BankAgent(Agent):
                         continue
 
         if best_action is None:
-            print("[BankAgent] 模拟后未发现可行方案，转为防守。")
+            logger.info("[BankAgent] 模拟后未发现可行方案，转为防守。")
             return self._generate_safety_shot(balls, my_targets)
             
-        print(f"[BankAgent] 决策: V0={best_action['V0']:.1f}, phi={best_action['phi']:.1f}, score={best_score} {tag}")
+        logger.info(
+            "[BankAgent] 决策: V0=%.1f, phi=%.1f, score=%.1f %s",
+            best_action['V0'],
+            best_action['phi'],
+            best_score,
+            best_tag,
+        )
         return best_action
 
     def _random_action(self):
