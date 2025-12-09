@@ -322,30 +322,32 @@ class BasicAgent(Agent):
             traceback.print_exc()
             return self._random_action()
 
-# class NewAgent(Agent):
-#     """自定义 Agent 模板（待学生实现）"""
-    
-#     def __init__(self):
-#         pass
-    
-#     def decision(self, balls=None, my_targets=None, table=None):
-#         """决策方法
-        
-#         参数：
-#             observation: (balls, my_targets, table)
-        
-#         返回：
-#             dict: {'V0', 'phi', 'theta', 'a', 'b'}
-#         """
-#         return self._random_action()
-
 class NewAgent(Agent):
+    """自定义 Agent 模板（待学生实现）"""
+    
+    def __init__(self):
+        self.agent = MCTSAgent(search_depth=2)
+    
+    def decision(self, balls=None, my_targets=None, table=None):
+        """决策方法
+        
+        参数：
+            observation: (balls, my_targets, table)
+        
+        返回：
+            dict: {'V0', 'phi', 'theta', 'a', 'b'}
+        """
+        return self.agent.decision(balls=balls, my_targets=my_targets, table=table)
+
+class MCTSAgent(Agent):
     """
     改进版 MCTS-Lite 智能体
     特性：
     1. 几何初筛 + 局部微调 (解决打不进的问题)
     2. 显式防守策略 (解决乱打犯规的问题)
     3. 详细的调试日志 (解决不知道在干嘛的问题)
+
+    成绩: 29.0/40.0, 0.725
     """
     def __init__(self, search_depth=1):
         super().__init__()
@@ -391,12 +393,12 @@ class NewAgent(Agent):
 
     def evaluate_state(self, shot, my_targets, original_target_id):
         """改进的评分函数"""
-        # 1. 严重失误判定
-        if not shot.cue.is_shot: return -1000
+        if not shot.events: 
+            return -1000
         
         pocketed_ids = []
         for event in shot.events:
-            if event.event_type == pt.events.Type.POCKETED:
+            if event.event_type.name == 'POCKETED':
                 pocketed_ids.extend(event.agents)
         
         if 'cue' in pocketed_ids: return -1000 # 母球洗袋
