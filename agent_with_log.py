@@ -812,14 +812,13 @@ class BankAgent(Agent):
             return self._generate_safety_shot(balls, my_targets)
 
         # --- 3. 混合排序 ---
-        # 翻袋有天然劣势 (难度大)，增加 30 分的惩罚权重
-        # 这样只有当直打非常难 (切角极大) 时，翻袋才会排在前面
+        # 略微降低翻袋惩罚，鼓励在直打困难时尝试翻袋
         def sort_key(c):
-            penalty = 0 if c['type'] == 'direct' else 30
+            penalty = 0 if c['type'] == 'direct' else 25
             return c['cut_angle'] + c['distance']*10 + penalty
 
         candidates.sort(key=sort_key)
-        top_candidates = candidates[:6] # 扩大搜索范围以包含潜在的翻袋机会
+        top_candidates = candidates[:5]  # 只关注前5个机会
 
         logger.info(
             "[BankAgent] 评估 %d 个线路 (含 %d 个翻袋)...",
@@ -828,21 +827,25 @@ class BankAgent(Agent):
         )
 
         best_action = None
-        best_score = -float('inf')
+        best_score = 0  # 只接受得分>0的方案
+        best_tag = ""
 
-        # --- 4. 模拟与微调 ---
+        # --- 4. 模拟与高精度微调 ---
         for cand in top_candidates:
-            phi_offsets = [0, -0.5, 0.5, -1.0, 1.0]
+            # 高密度角度微调：直打[-1.5,1.5]分21份；翻袋[-2.5,2.5]分31份
+            phi_offsets = np.linspace(-1.5, 1.5, 21)
             
-            # 翻袋需要更大的力度来克服撞库损失
             if cand['type'] == 'bank':
-                # 翻袋微调范围稍大一点
-                phi_offsets = [0, -0.5, 0.5, -1.0, 1.0, -1.5, 1.5]
-                base_speeds = [3.5, 5.0, 7.5] # 力度加大
+                phi_offsets = np.linspace(-2.5, 2.5, 31)
+                base_speeds = [4.0, 6.0, 8.0]
             else:
-                base_speeds = [2.0, 4.0, 6.5]
+                base_speeds = [2.5, 4.5, 6.5]
             
             for V0 in base_speeds:
+                # 如果已有较高得分，当前线路不再尝试更多力度以节省时间
+                if best_score > 80:
+                    break
+
                 for offset in phi_offsets:
                     phi_try = cand['phi_center'] + offset
                     
@@ -859,19 +862,16 @@ class BankAgent(Agent):
                         if score > best_score:
                             best_score = score
                             best_action = {'V0': V0, 'phi': phi_try, 'theta': 0, 'a': 0, 'b': 0}
-                            best_tag = "[翻袋!]" if cand['type'] == 'bank' else ""
-                            # 提前剪枝：如果是高分直打直接返回，如果是翻袋也返回
-                            if score > 120:
-                                logger.info("[BankAgent] 找到绝佳%s线路！Score: %.1f", best_tag, score)
-                                return best_action
-                            
+                            best_tag = "[翻袋]" if cand['type'] == 'bank' else "[直打]"
 
-                    except Exception as e:
-                        # print(f"Sim failed: {e}")
+                            if score > 120:
+                                logger.info("[BankAgent] 锁定%s绝佳线路！Score: %.1f", best_tag, score)
+                                return best_action
+                    except Exception:
                         continue
 
         if best_action is None:
-            logger.info("[BankAgent] 模拟后未发现可行方案，转为防守。")
+            logger.info("[BankAgent] 模拟显示无进球机会 (BestScore: %.1f)，智能转为防守。", best_score)
             return self._generate_safety_shot(balls, my_targets)
             
         logger.info(

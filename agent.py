@@ -766,7 +766,7 @@ class BankAgent(Agent):
         cue_pos = cue_ball.state.rvw[0]
         R = cue_ball.params.R
 
-        # --- 1. 生成直打候选 (Direct) ---
+        # --- 1. 生成直打候选 ---
         candidates = [] 
         remaining_own = [bid for bid in my_targets if balls[bid].state.s != 4]
         if not remaining_own: remaining_own = ['8']
@@ -775,9 +775,7 @@ class BankAgent(Agent):
             obj_pos = balls[ball_id].state.rvw[0]
             for pid, pocket in table.pockets.items():
                 phi_ideal, cut_angle, dist = self._calculate_ghost_ball_params(cue_pos, obj_pos, pocket.center, R)
-                
                 if abs(cut_angle) > 85: continue
-                
                 candidates.append({
                     'type': 'direct',
                     'target_id': ball_id,
@@ -786,7 +784,7 @@ class BankAgent(Agent):
                     'distance': dist
                 })
 
-        # --- 2. 生成翻袋候选 (Bank) ---
+        # --- 2. 生成翻袋候选 ---
         bank_candidates = self._generate_bank_candidates(balls, my_targets, table, cue_pos, R)
         candidates.extend(bank_candidates)
 
@@ -795,33 +793,37 @@ class BankAgent(Agent):
             return self._generate_safety_shot(balls, my_targets)
 
         # --- 3. 混合排序 ---
-        # 翻袋有天然劣势 (难度大)，增加 30 分的惩罚权重
-        # 这样只有当直打非常难 (切角极大) 时，翻袋才会排在前面
         def sort_key(c):
-            penalty = 0 if c['type'] == 'direct' else 30
+            penalty = 0 if c['type'] == 'direct' else 25 # 略微降低翻袋惩罚，鼓励尝试
             return c['cut_angle'] + c['distance']*10 + penalty
 
         candidates.sort(key=sort_key)
-        top_candidates = candidates[:6] # 扩大搜索范围以包含潜在的翻袋机会
+        top_candidates = candidates[:5] # 只关注前5个最好的机会
 
         print(f"[BankAgent] 评估 {len(top_candidates)} 个线路 (含 {sum(1 for c in top_candidates if c['type']=='bank')} 个翻袋)...")
 
         best_action = None
-        best_score = -float('inf')
+        # 【关键修改1】：初始分数设为0，任何负分(没进球)都不会被记录为 best_action
+        best_score = 0 
 
-        # --- 4. 模拟与微调 ---
+        # --- 4. 模拟与高精度微调 ---
         for cand in top_candidates:
-            phi_offsets = [0, -0.5, 0.5, -1.0, 1.0]
+            # 【关键修改2】：使用高密度搜索
+            # 几何计算通常很准，但物理偏差通常在 -1.5 到 1.5 度之间
+            # 我们生成 21 个点，精度达到 0.15 度，足以覆盖进球窗口
+            phi_offsets = np.linspace(-1.5, 1.5, 21)
             
-            # 翻袋需要更大的力度来克服撞库损失
+            # 翻袋需要更大的范围
             if cand['type'] == 'bank':
-                # 翻袋微调范围稍大一点
-                phi_offsets = [0, -0.5, 0.5, -1.0, 1.0, -1.5, 1.5]
-                base_speeds = [3.5, 5.0, 7.5] # 力度加大
+                phi_offsets = np.linspace(-2.5, 2.5, 31) # 翻袋更难瞄，试更多
+                speeds = [4.0, 6.0, 8.0] # 翻袋必须大力
             else:
-                base_speeds = [2.0, 4.0, 6.5]
-            
-            for V0 in base_speeds:
+                speeds = [2.5, 4.5, 6.5] # 直打力度
+
+            for V0 in speeds:
+                # 优化：如果当前线路已经找到必进球(>80)，就不再试其他力度了，节省时间
+                if best_score > 80: break 
+
                 for offset in phi_offsets:
                     phi_try = cand['phi_center'] + offset
                     
@@ -835,27 +837,27 @@ class BankAgent(Agent):
                         pt.simulate(shot, inplace=True)
                         score = self.evaluate_state(shot, my_targets, cand['target_id'])
                         
+                        # 只有得分比当前好，才更新
                         if score > best_score:
                             best_score = score
                             best_action = {'V0': V0, 'phi': phi_try, 'theta': 0, 'a': 0, 'b': 0}
                             
-                            # 翻袋进球给予额外日志奖励 (方便观察)
-                            tag = "[翻袋!]" if cand['type'] == 'bank' else ""
-                            # 提前剪枝：如果是高分直打直接返回，如果是翻袋也返回
-                            if score > 120:
-                                print(f"[BankAgent] 找到绝佳{tag}线路！Score: {score:.1f}")
+                            # 提前剪枝
+                            if score > 120: 
+                                tag = "[翻袋]" if cand['type'] == 'bank' else "[直打]"
+                                print(f"[BankAgent] 🎯 锁定{tag}绝佳线路！(Score: {score:.1f}, phi_off: {offset:.2f})")
                                 return best_action
-                            
-
-                    except Exception as e:
-                        # print(f"Sim failed: {e}")
+                                
+                    except Exception:
                         continue
 
+        # 【关键修改3】：如果模拟了一圈，发现最高分还是 0 (意味着全是负分/没进球)
+        # 坚决不打！转为防守！
         if best_action is None:
-            print("[BankAgent] 模拟后未发现可行方案，转为防守。")
+            print(f"[BankAgent] 模拟显示无进球机会 (BestScore: {best_score})，智能转为防守。")
             return self._generate_safety_shot(balls, my_targets)
             
-        print(f"[BankAgent] 决策: V0={best_action['V0']:.1f}, phi={best_action['phi']:.1f}, score={best_score} {tag}")
+        print(f"[BankAgent] 决策: V0={best_action['V0']:.1f}, phi={best_action['phi']:.1f} (ExpScore:{best_score:.1f})")
         return best_action
 
     def _random_action(self):
