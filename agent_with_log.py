@@ -17,12 +17,15 @@ import os
 from datetime import datetime
 import random
 import logging
+import torch
 # from poolagent.pool import Pool as CuetipEnv, State as CuetipState
 # from poolagent import FunctionAgent
 
 from bayes_opt import BayesianOptimization, SequentialDomainReductionTransformer
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import Matern
+from train.train_fast import AimNet
+from utils import calculate_ghost_ball_params
 
 
 logger = logging.getLogger("evaluate")
@@ -885,3 +888,128 @@ class BankAgent(Agent):
 
     def _random_action(self):
         return {'V0': 1.0, 'phi': np.random.uniform(0,360), 'theta':0, 'a':0, 'b':0}
+
+
+class LearningAgent(Agent):
+    """Neural-correction aiming agent mirroring agent.py implementation with logging."""
+
+    def __init__(self):
+        super().__init__()
+        self.model = AimNet()
+        try:
+            self.model.load_state_dict(torch.load('aim_model.pth'))
+            self.model.eval()
+            logger.info("LearningAgent: 神经网络模型加载成功！")
+        except Exception:
+            logger.warning("LearningAgent: 未找到模型文件，将回退到纯几何模式。")
+            self.model = None
+
+    def _predict_correction(self, cut_angle, distance, V0):
+        if self.model is None:
+            return 0.0
+
+        inputs = np.array([cut_angle / 90.0, distance / 2.0, V0 / 10.0], dtype=np.float32)
+        inputs_tensor = torch.from_numpy(inputs).unsqueeze(0)
+
+        with torch.no_grad():
+            delta_phi = self.model(inputs_tensor).item()
+        return delta_phi
+
+    def _generate_safety_shot(self, balls, my_targets):
+        logger.info("[LearningAgent] 启动防守模式 (Safety Mode)")
+        cue_pos = balls['cue'].state.rvw[0]
+        min_dist = float('inf')
+        best_target = None
+
+        candidates = [b for b in my_targets if balls[b].state.s != 4]
+        if not candidates:
+            candidates = ['8']
+
+        for bid in candidates:
+            obj_pos = balls[bid].state.rvw[0]
+            dist = np.linalg.norm(np.array(obj_pos[:2]) - np.array(cue_pos[:2]))
+            if dist < min_dist:
+                min_dist = dist
+                best_target = bid
+
+        if best_target:
+            obj_pos = balls[best_target].state.rvw[0]
+            dx = obj_pos[0] - cue_pos[0]
+            dy = obj_pos[1] - cue_pos[1]
+            phi = np.degrees(np.arctan2(dy, dx)) % 360
+            return {'V0': 0.8, 'phi': phi, 'theta': 0, 'a': 0, 'b': 0}
+
+        return self._random_action()
+
+    def decision(self, balls=None, my_targets=None, table=None):
+        if balls is None:
+            return self._random_action()
+
+        cue_ball = balls['cue']
+        cue_pos = cue_ball.state.rvw[0]
+        R = cue_ball.params.R
+
+        candidates = []
+        remaining = [b for b in my_targets if balls[b].state.s != 4]
+        if not remaining:
+            remaining = ['8']
+
+        # 1. 快速几何筛选
+        for ball_id in remaining:
+            obj_pos = balls[ball_id].state.rvw[0]
+            for pid, pocket in table.pockets.items():
+                phi_geo, cut_angle, dist = calculate_ghost_ball_params(cue_pos, obj_pos, pocket.center, R)
+                if abs(cut_angle) > 85:
+                    continue
+
+                candidates.append({
+                    'target_id': ball_id,
+                    'phi_geo': phi_geo,
+                    'cut_angle': cut_angle,
+                    'distance': dist,
+                    'pocket_id': pid
+                })
+
+        if not candidates:
+            return self._generate_safety_shot(balls, my_targets)
+
+        candidates.sort(key=lambda x: x['cut_angle'] + x['distance'] * 10)
+
+        best_action = None
+        best_score = -float('inf')
+
+        # 2. 神经网络辅助决策（仅评估前三个候选）
+        for cand in candidates[:3]:
+            speeds = [3.0, 5.0, 7.0]
+
+            for V0 in speeds:
+                delta_phi = self._predict_correction(cand['cut_angle'], cand['distance'], V0)
+                phi_final = cand['phi_geo'] + delta_phi
+
+                sim_balls = {bid: copy.deepcopy(ball) for bid, ball in balls.items()}
+                sim_table = copy.deepcopy(table)
+                cue = pt.Cue(cue_ball_id="cue")
+                cue.set_state(V0=V0, phi=phi_final, theta=0, a=0, b=0)
+                shot = pt.System(table=sim_table, balls=sim_balls, cue=cue)
+
+                try:
+                    pt.simulate(shot, inplace=True)
+                    score = self.evaluate_state(shot, my_targets, cand['target_id'])
+
+                    if score > best_score:
+                        best_score = score
+                        best_action = {'V0': V0, 'phi': phi_final, 'theta': 0, 'a': 0, 'b': 0}
+
+                        if score > 100:
+                            logger.info("[LearningAgent] Neural Correction Applied: %.2f°", delta_phi)
+                            return best_action
+                except Exception as e:
+                    logger.error("[LearningAgent] Simulation failed: %s", e)
+                    continue
+
+        if best_action:
+            return best_action
+
+        logger.info("[LearningAgent] 模型与几何均未找到进球方案，转为防守。")
+        return self._generate_safety_shot(balls, my_targets)
+

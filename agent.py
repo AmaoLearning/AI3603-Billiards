@@ -25,7 +25,7 @@ from sklearn.gaussian_process.kernels import Matern
 
 import torch
 from utils import calculate_ghost_ball_params
-from train.train_robust import AimNet 
+from train.train_fast import AimNet 
 
 
 def analyze_shot_for_reward(shot: pt.System, last_state: dict, player_targets: list):
