@@ -847,6 +847,59 @@ class LearningAgent(Agent):
             return {'V0': 0.8, 'phi': phi, 'theta': 0, 'a': 0, 'b': 0}
         
         return self._random_action()
+    
+    def evaluate_state(self, shot, my_targets, original_target_id):
+        """改进的评分函数"""
+        if not shot.events: 
+            return -1000
+        
+        pocketed_ids = []
+        cue_scratch = False
+        
+        for event in shot.events:
+            # 兼容性写法
+            if event.event_type.name == 'POCKETED':
+                pocketed_ids.extend(event.agents)
+        
+        if 'cue' in pocketed_ids: cue_scratch = True
+        if shot.balls['cue'].state.s == 4: cue_scratch = True
+
+        if cue_scratch: return -500
+        
+        # 进攻结果判定
+        score = 0
+        if original_target_id in pocketed_ids:
+            score += 100 
+        elif any(bid in my_targets for bid in pocketed_ids):
+            score += 80 
+        else:
+            return -50 
+
+        # 走位评估
+        final_balls = shot.balls
+        final_cue = final_balls['cue']
+        
+        if original_target_id == '8':
+             others = [b for b in my_targets if b != '8' and final_balls[b].state.s != 4]
+             if not others: return 10000
+             else: return -1000 
+
+        cue_pos = final_cue.state.rvw[0]
+        R = final_cue.params.R
+        
+        remaining = [b for b in my_targets if b not in pocketed_ids and final_balls[b].state.s != 4]
+        if not remaining: remaining = ['8']
+
+        best_next_shot = 0
+        for bid in remaining:
+            b_pos = final_balls[bid].state.rvw[0]
+            for pid, pocket in self._get_pockets(shot.table).items():
+                _, cut, dist = self._calculate_ghost_ball_params(cue_pos, b_pos, pocket.center, R)
+                if cut < 50:
+                    quality = (60 - cut) + (1.0 - abs(dist - 1.0))*20
+                    if quality > best_next_shot: best_next_shot = quality
+        
+        return score + best_next_shot * 0.5
 
     def decision(self, balls=None, my_targets=None, table=None):
         if balls is None: return self._random_action()
