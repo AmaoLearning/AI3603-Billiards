@@ -23,6 +23,10 @@ from bayes_opt import BayesianOptimization, SequentialDomainReductionTransformer
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import Matern
 
+import torch
+from utils import calculate_ghost_ball_params
+from train.train_robust import AimNet 
+
 
 def analyze_shot_for_reward(shot: pt.System, last_state: dict, player_targets: list):
     """
@@ -360,41 +364,7 @@ class MCTSAgent(Agent):
         print("ImprovedMCTSAgent 已初始化 - 包含防守逻辑与微调瞄准")
 
     def _get_pockets(self, table):
-        return table.pockets
-
-    def _calculate_ghost_ball_params(self, cue_pos, obj_pos, pocket_pos, R):
-        """计算几何参数 (Ghost Ball)"""
-        pocket_vec = np.array([pocket_pos[0], pocket_pos[1], 0])
-        obj_vec = np.array([obj_pos[0], obj_pos[1], 0])
-        
-        # 向量：目标球 -> 袋口
-        vec_obj_pocket = pocket_vec - obj_vec # 注意方向：从球指向袋口
-        dist_obj_pocket = np.linalg.norm(vec_obj_pocket)
-        vec_obj_pocket_unit = vec_obj_pocket / (dist_obj_pocket + 1e-6)
-        
-        # 假想球位置：目标球中心沿进球线反向延伸 2R
-        # 也就是：母球撞击目标球时，母球应该在的位置
-        ghost_pos = obj_vec - vec_obj_pocket_unit * (2 * R)
-        
-        # 瞄准向量：母球 -> 假想球
-        cue_vec_3d = np.array([cue_pos[0], cue_pos[1], 0])
-        aim_vec = ghost_pos - cue_vec_3d
-        
-        # 计算角度 phi
-        phi = np.degrees(np.arctan2(aim_vec[1], aim_vec[0])) % 360
-        
-        # 计算切角 (Cut Angle)
-        # 向量：母球 -> 目标球
-        vec_cue_obj = obj_vec - cue_vec_3d
-        norm_co = np.linalg.norm(vec_cue_obj)
-        
-        if norm_co == 0: return phi, 180, 1000
-        
-        # 切角是 (母球-目标球) 连线 与 (目标球-袋口) 连线 的夹角
-        cos_theta = np.dot(vec_cue_obj, vec_obj_pocket) / (norm_co * dist_obj_pocket + 1e-6)
-        cut_angle = np.degrees(np.arccos(np.clip(cos_theta, -1, 1)))
-        
-        return phi, cut_angle, norm_co
+        return table.pockets 
 
     def evaluate_state(self, shot, my_targets, original_target_id):
         """改进的评分函数"""
@@ -443,7 +413,7 @@ class MCTSAgent(Agent):
         for bid in remaining:
             b_pos = final_balls[bid].state.rvw[0]
             for pid, pocket in self._get_pockets(shot.table).items():
-                _, cut, dist = self._calculate_ghost_ball_params(cue_pos, b_pos, pocket.center, R)
+                _, cut, dist = calculate_ghost_ball_params(cue_pos, b_pos, pocket.center, R)
                 # 简单的下一杆质量评分
                 if cut < 50:
                     quality = (60 - cut) + (1.0 - abs(dist - 1.0))*20
@@ -496,7 +466,7 @@ class MCTSAgent(Agent):
         for ball_id in remaining_own:
             obj_pos = balls[ball_id].state.rvw[0]
             for pid, pocket in table.pockets.items():
-                phi_ideal, cut_angle, dist = self._calculate_ghost_ball_params(cue_pos, obj_pos, pocket.center, R)
+                phi_ideal, cut_angle, dist = calculate_ghost_ball_params(cue_pos, obj_pos, pocket.center, R)
                 
                 # 只有非常难打的球才会被过滤 (阈值 85度)
                 if abs(cut_angle) > 85: continue
@@ -606,40 +576,6 @@ class BankAgent(Agent):
             return np.array([2 * rails['right'] - px, py, 0])
         return None
 
-    def _calculate_ghost_ball_params(self, cue_pos, obj_pos, target_pos, R):
-        """
-        计算几何参数 (Ghost Ball)
-        target_pos 可以是真实袋口，也可以是虚拟袋口(用于翻袋)
-        """
-        target_vec = np.array([target_pos[0], target_pos[1], 0])
-        obj_vec = np.array([obj_pos[0], obj_pos[1], 0])
-        
-        # 向量：目标球 -> 目标点(袋口/虚拟袋口)
-        vec_obj_target = target_vec - obj_vec 
-        dist_obj_target = np.linalg.norm(vec_obj_target)
-        vec_obj_target_unit = vec_obj_target / (dist_obj_target + 1e-6)
-        
-        # 假想球位置：目标球中心沿进球线反向延伸 2R
-        ghost_pos = obj_vec - vec_obj_target_unit * (2 * R)
-        
-        # 瞄准向量：母球 -> 假想球
-        cue_vec_3d = np.array([cue_pos[0], cue_pos[1], 0])
-        aim_vec = ghost_pos - cue_vec_3d
-        
-        # 计算角度 phi
-        phi = np.degrees(np.arctan2(aim_vec[1], aim_vec[0])) % 360
-        
-        # 计算切角 (Cut Angle)
-        vec_cue_obj = obj_vec - cue_vec_3d
-        norm_co = np.linalg.norm(vec_cue_obj)
-        
-        if norm_co == 0: return phi, 180, 1000
-        
-        cos_theta = np.dot(vec_cue_obj, vec_obj_target) / (norm_co * dist_obj_target + 1e-6)
-        cut_angle = np.degrees(np.arccos(np.clip(cos_theta, -1, 1)))
-        
-        return phi, cut_angle, norm_co
-
     def evaluate_state(self, shot, my_targets, original_target_id):
         """改进的评分函数"""
         if not shot.events: 
@@ -686,7 +622,7 @@ class BankAgent(Agent):
         for bid in remaining:
             b_pos = final_balls[bid].state.rvw[0]
             for pid, pocket in self._get_pockets(shot.table).items():
-                _, cut, dist = self._calculate_ghost_ball_params(cue_pos, b_pos, pocket.center, R)
+                _, cut, dist = calculate_ghost_ball_params(cue_pos, b_pos, pocket.center, R)
                 if cut < 50:
                     quality = (60 - cut) + (1.0 - abs(dist - 1.0))*20
                     if quality > best_next_shot: best_next_shot = quality
@@ -737,7 +673,7 @@ class BankAgent(Agent):
                     virtual_pos = self._get_virtual_pocket(pocket.center, rail_name, rails)
                     
                     # 几何计算：把虚拟袋口当做目标
-                    phi_ideal, cut_angle, dist_cue_obj = self._calculate_ghost_ball_params(
+                    phi_ideal, cut_angle, dist_cue_obj = calculate_ghost_ball_params(
                         cue_pos, obj_pos, virtual_pos, R
                     )
                     
@@ -774,7 +710,7 @@ class BankAgent(Agent):
         for ball_id in remaining_own:
             obj_pos = balls[ball_id].state.rvw[0]
             for pid, pocket in table.pockets.items():
-                phi_ideal, cut_angle, dist = self._calculate_ghost_ball_params(cue_pos, obj_pos, pocket.center, R)
+                phi_ideal, cut_angle, dist = calculate_ghost_ball_params(cue_pos, obj_pos, pocket.center, R)
                 if abs(cut_angle) > 85: continue
                 candidates.append({
                     'type': 'direct',
@@ -862,3 +798,128 @@ class BankAgent(Agent):
 
     def _random_action(self):
         return {'V0': 1.0, 'phi': np.random.uniform(0,360), 'theta':0, 'a':0, 'b':0}
+
+class LearningAgent(Agent):
+    def __init__(self):
+        super().__init__()
+        self.model = AimNet()
+        try:
+            self.model.load_state_dict(torch.load('aim_model.pth'))
+            self.model.eval() # 开启评估模式
+            print("LearningAgent: 神经网络模型加载成功！")
+        except:
+            print("LearningAgent 警告: 未找到模型文件，将回退到纯几何模式。")
+            self.model = None
+
+    def _predict_correction(self, cut_angle, distance, V0):
+        if self.model is None: return 0.0
+        
+        # 构造输入并归一化 (必须与训练时一致)
+        inputs = np.array([cut_angle / 90.0, distance / 2.0, V0 / 10.0], dtype=np.float32)
+        inputs_tensor = torch.from_numpy(inputs).unsqueeze(0) # Add batch dim
+        
+        with torch.no_grad():
+            delta_phi = self.model(inputs_tensor).item()
+        return delta_phi
+    
+    def _generate_safety_shot(self, balls, my_targets):
+        """防守策略"""
+        print("[BankAgent] 启动防守模式 (Safety Mode)")
+        cue_pos = balls['cue'].state.rvw[0]
+        min_dist = float('inf')
+        best_target = None
+        
+        candidates = [b for b in my_targets if balls[b].state.s != 4]
+        if not candidates: candidates = ['8']
+        
+        for bid in candidates:
+            obj_pos = balls[bid].state.rvw[0]
+            dist = np.linalg.norm(np.array(obj_pos[:2]) - np.array(cue_pos[:2]))
+            if dist < min_dist:
+                min_dist = dist
+                best_target = bid
+        
+        if best_target:
+            obj_pos = balls[best_target].state.rvw[0]
+            dx = obj_pos[0] - cue_pos[0]
+            dy = obj_pos[1] - cue_pos[1]
+            phi = np.degrees(np.arctan2(dy, dx)) % 360
+            return {'V0': 0.8, 'phi': phi, 'theta': 0, 'a': 0, 'b': 0}
+        
+        return self._random_action()
+
+    def decision(self, balls=None, my_targets=None, table=None):
+        if balls is None: return self._random_action()
+        
+        cue_ball = balls['cue']
+        cue_pos = cue_ball.state.rvw[0]
+        R = cue_ball.params.R
+        
+        candidates = []
+        remaining = [b for b in my_targets if balls[b].state.s != 4]
+        if not remaining: remaining = ['8']
+
+        # 1. 快速几何筛选
+        for ball_id in remaining:
+            obj_pos = balls[ball_id].state.rvw[0]
+            for pid, pocket in table.pockets.items():
+                phi_geo, cut_angle, dist = calculate_ghost_ball_params(cue_pos, obj_pos, pocket.center, R)
+                if abs(cut_angle) > 85: continue
+                
+                candidates.append({
+                    'target_id': ball_id,
+                    'phi_geo': phi_geo,
+                    'cut_angle': cut_angle,
+                    'distance': dist,
+                    'pocket_id': pid
+                })
+        
+        if not candidates:
+            return self._generate_safety_shot(balls, my_targets)
+
+        # 排序
+        candidates.sort(key=lambda x: x['cut_angle'] + x['distance']*10)
+        
+        best_action = None
+        best_score = -float('inf')
+
+        # 2. 神经网络辅助决策
+        # 我们只看前 3 个最好的候选，因为推理很快，我们可以直接预测它们的修正量
+        for cand in candidates[:3]:
+            
+            # 我们尝试 3 种力度，询问神经网络每种力度下的修正角
+            speeds = [3.0, 5.0, 7.0]
+            
+            for V0 in speeds:
+                # === 核心差异点 ===
+                # 旧方法：Simulate 20次找角度
+                # 新方法：Model Predict 1次
+                
+                delta_phi = self._predict_correction(cand['cut_angle'], cand['distance'], V0)
+                phi_final = cand['phi_geo'] + delta_phi
+                
+                # 只需验证模拟 1 次！
+                sim_balls = {bid: copy.deepcopy(ball) for bid, ball in balls.items()}
+                sim_table = copy.deepcopy(table)
+                cue = pt.Cue(cue_ball_id="cue")
+                cue.set_state(V0=V0, phi=phi_final, theta=0, a=0, b=0)
+                shot = pt.System(table=sim_table, balls=sim_balls, cue=cue)
+                
+                try:
+                    pt.simulate(shot, inplace=True)
+                    score = self.evaluate_state(shot, my_targets, cand['target_id'])
+                    
+                    if score > best_score:
+                        best_score = score
+                        best_action = {'V0': V0, 'phi': phi_final, 'theta': 0, 'a': 0, 'b': 0}
+                        
+                        if score > 100: # 找到必进球
+                             print(f"[LearningAgent] Neural Correction Applied: {delta_phi:.2f}°")
+                             return best_action
+                except: continue
+
+        if best_action:
+            return best_action
+        else:
+            # 兜底：如果神经网络预测的也没进，就打那个离袋口最近的
+            return self._generate_safety_shot(balls, my_targets)
