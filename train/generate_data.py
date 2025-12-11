@@ -98,6 +98,8 @@ def generate_fast_data(num_samples=10000, filename='fast_aim_data.csv'):
                     break # 这一杆记录完就跳出，不需要找最佳解
             except:
                 continue
+
+            print(f"[Shot] cut_angle={cut_angle}, dist={dist}, V0={V0}, label_delta={offset_try}: shot_success={shot_success}")
         
         if shot_success:
             pbar.update(1)
