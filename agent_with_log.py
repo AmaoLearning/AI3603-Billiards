@@ -339,7 +339,7 @@ class NewAgent(Agent):
     """自定义 Agent 模板（待学生实现）"""
     
     def __init__(self):
-        self.agent = BankAgent()
+        self.agent = LearningAgent()
     
     def decision(self, balls=None, my_targets=None, table=None):
         """决策方法
