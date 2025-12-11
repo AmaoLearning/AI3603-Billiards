@@ -339,7 +339,8 @@ class NewAgent(Agent):
     """自定义 Agent 模板（待学生实现）"""
     
     def __init__(self):
-        self.agent = LearningAgent()
+        model_path = os.path.join('train', 'checkpoints', 'aim_model.pth')
+        self.agent = LearningAgent(model_path)
     
     def decision(self, balls=None, my_targets=None, table=None):
         """决策方法
@@ -711,11 +712,11 @@ class BankAgent(Agent):
 class LearningAgent(Agent):
     """Neural-correction aiming agent mirroring agent.py implementation with logging."""
 
-    def __init__(self):
+    def __init__(self, model_path='aim_model.pth'):
         super().__init__()
         self.model = AimNet()
         try:
-            self.model.load_state_dict(torch.load('aim_model.pth'))
+            self.model.load_state_dict(torch.load(model_path))
             self.model.eval()
             logger.info("LearningAgent: 神经网络模型加载成功！")
         except Exception:
