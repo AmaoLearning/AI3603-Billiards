@@ -11,7 +11,9 @@ def generate_fast_data(num_samples=10000, filename='fast_aim_data.csv'):
     # 初始化标准8球桌
     table = pt.Table.from_game_type(pt.GameType.EIGHTBALL)
     R = pt.Ball('1').params.R
-    
+    bounds = { 'min_x': R, 'max_x': table.w - R,
+               'min_y': R, 'max_y': table.l - R} 
+ 
     # 获取所有袋口以便快速随机选择
     pockets = list(table.pockets.values())
     
@@ -20,16 +22,17 @@ def generate_fast_data(num_samples=10000, filename='fast_aim_data.csv'):
     
     # 使用 while 循环直到凑够数据
     pbar = tqdm(total=num_samples)
-    
+    min_dist = 2 * R 
+ 
     while len(data) < num_samples:
         # 1. 快速随机摆球
         # 技巧：直接在半场随机生成，提高效率
-        cue_pos = [np.random.uniform(-1.0, 1.0), np.random.uniform(-0.6, 0.6), R]
-        obj_pos = [np.random.uniform(-1.0, 1.0), np.random.uniform(-0.6, 0.6), R]
+        cue_pos = [np.random.uniform(bounds['min_x'], bounds['max_x']), np.random.uniform(bounds['min_y'], bounds['max_y']), R]
+        obj_pos = [np.random.uniform(bounds['min_x'], bounds['max_x']), np.random.uniform(bounds['min_y'], bounds['max_y']), R]
         
         # 距离太近直接重开
         dist = np.linalg.norm(np.array(cue_pos[:2]) - np.array(obj_pos[:2]))
-        if dist < 0.15: continue
+        if dist <= min_dist: continue
         
         # 随机选袋口
         pocket = pockets[np.random.randint(6)]
@@ -51,7 +54,7 @@ def generate_fast_data(num_samples=10000, filename='fast_aim_data.csv'):
         # 3. 简单过滤 (避免全是直线球)
         # 只有当切角很小(<10度)时，我们才以 50% 的概率跳过
         # 这样既保留了简单样本，又不会让数据严重失衡
-        if abs(cut_angle) < 10 and np.random.random() < 0.5:
+        if abs(cut_angle) >= 90 or (abs(cut_angle) < 10 and np.random.random() < 0.5):
             continue
             
         # 4. 随机尝试进球 (蒙特卡洛)
@@ -95,6 +98,8 @@ def generate_fast_data(num_samples=10000, filename='fast_aim_data.csv'):
                         'label_delta': offset_try # 直接记录这个能进的偏移量
                     })
                     shot_success = True
+                    
+                    print(f"[Shot] cut_angle={cut_angle}, dist={dist}, V0={V0}, label_delta={offset_try}: shot_success={shot_success}")
                     break # 这一杆记录完就跳出，不需要找最佳解
             except:
                 continue
@@ -112,4 +117,5 @@ def generate_fast_data(num_samples=10000, filename='fast_aim_data.csv'):
     print(f"完成！耗时 {time.time()-start_time:.1f}s, 数据已保存为 {filename}")
 
 if __name__ == "__main__":
-    generate_fast_data(num_samples=5000, filename=os.path.join('data', 'fast_aim_data.csv')) # 先生成 5000 条试试
+    os.makedirs('data', exist_ok=True)
+    generate_fast_data(num_samples=10000, filename=os.path.join('data', 'fast_aim_data.csv')) # 先生成 5000 条试试
