@@ -965,8 +965,8 @@ class LearningAgent(Agent):
             score += 100 
         elif any(bid in my_targets for bid in pocketed_ids):
             score += 80 
-        else:
-            return -50 
+        # else:
+        #     return -50 
 
         # 走位评估
         final_balls = shot.balls
@@ -1061,6 +1061,7 @@ class LearningAgent(Agent):
                     continue
 
         if best_action:
+            logger.info(f"[LearningAgent] 决策: V0={best_action['V0']:.1f}, phi={best_action['phi']:.1f} (ExpScore:{best_score:.1f})")
             return best_action
 
         logger.info("[LearningAgent] 模型与几何均未找到进球方案，转为防守。")

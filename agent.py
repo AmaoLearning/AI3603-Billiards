@@ -872,8 +872,8 @@ class LearningAgent(Agent):
             score += 100 
         elif any(bid in my_targets for bid in pocketed_ids):
             score += 80 
-        else:
-            return -50 
+        # else:
+        #     return -50 
 
         # 走位评估
         final_balls = shot.balls
@@ -972,7 +972,9 @@ class LearningAgent(Agent):
                 except: continue
 
         if best_action:
+            print(f"[LearningAgent] 决策: V0={best_action['V0']:.1f}, phi={best_action['phi']:.1f} (ExpScore:{best_score:.1f})")
             return best_action
         else:
             # 兜底：如果神经网络预测的也没进，就打那个离袋口最近的
+            print(f"[LearningAgent] 决策: 防守")
             return self._generate_safety_shot(balls, my_targets)
