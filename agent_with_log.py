@@ -25,7 +25,7 @@ from bayes_opt import BayesianOptimization, SequentialDomainReductionTransformer
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import Matern
 from train.train_fast import AimNet
-from utils import calculate_ghost_ball_params
+from utils import calculate_ghost_ball_params, get_pockets, evaluate_state
 
 
 logger = logging.getLogger("evaluate")
@@ -372,98 +372,6 @@ class MCTSAgent(Agent):
         super().__init__()
         logger.info("ImprovedMCTSAgent 已初始化 - 包含防守逻辑与微调瞄准")
 
-    def _get_pockets(self, table):
-        return table.pockets
-
-    def _calculate_ghost_ball_params(self, cue_pos, obj_pos, pocket_pos, R):
-        """计算几何参数 (Ghost Ball)"""
-        pocket_vec = np.array([pocket_pos[0], pocket_pos[1], 0])
-        obj_vec = np.array([obj_pos[0], obj_pos[1], 0])
-        
-        # 向量：目标球 -> 袋口
-        vec_obj_pocket = pocket_vec - obj_vec # 注意方向：从球指向袋口
-        dist_obj_pocket = np.linalg.norm(vec_obj_pocket)
-        vec_obj_pocket_unit = vec_obj_pocket / (dist_obj_pocket + 1e-6)
-        
-        # 假想球位置：目标球中心沿进球线反向延伸 2R
-        # 也就是：母球撞击目标球时，母球应该在的位置
-        ghost_pos = obj_vec - vec_obj_pocket_unit * (2 * R)
-        
-        # 瞄准向量：母球 -> 假想球
-        cue_vec_3d = np.array([cue_pos[0], cue_pos[1], 0])
-        aim_vec = ghost_pos - cue_vec_3d
-        
-        # 计算角度 phi
-        phi = np.degrees(np.arctan2(aim_vec[1], aim_vec[0])) % 360
-        
-        # 计算切角 (Cut Angle)
-        # 向量：母球 -> 目标球
-        vec_cue_obj = obj_vec - cue_vec_3d
-        norm_co = np.linalg.norm(vec_cue_obj)
-        
-        if norm_co == 0: return phi, 180, 1000
-        
-        # 切角是 (母球-目标球) 连线 与 (目标球-袋口) 连线 的夹角
-        cos_theta = np.dot(vec_cue_obj, vec_obj_pocket) / (norm_co * dist_obj_pocket + 1e-6)
-        cut_angle = np.degrees(np.arccos(np.clip(cos_theta, -1, 1)))
-        
-        return phi, cut_angle, norm_co
-
-    def evaluate_state(self, shot, my_targets, original_target_id):
-        """改进的评分函数"""
-        if not shot.events: 
-            return -1000
-        
-        pocketed_ids = []
-        for event in shot.events:
-            if event.event_type.name == 'POCKETED':
-                pocketed_ids.extend(event.agents)
-        
-        if 'cue' in pocketed_ids: return -1000 # 母球洗袋
-        
-        # 2. 进攻结果判定
-        score = 0
-        hit_my_ball = False
-        
-        # 检查有没有进任何球
-        if original_target_id in pocketed_ids:
-            score += 100 # 打进目标球
-        elif any(bid in my_targets for bid in pocketed_ids):
-            score += 80 # 打进了其他的自己的球（运气球）
-        else:
-            # 没进球，给予惩罚
-            return -50 
-
-        # 3. 走位评估 (Lookahead)
-        final_balls = shot.balls
-        final_cue = final_balls['cue']
-        
-        # 如果打进黑8且没洗袋，直接胜利
-        if original_target_id == '8':
-             # 确保没有其他自己的球还没打
-             others = [b for b in my_targets if b != '8' and final_balls[b].state.s != 4]
-             if not others: return 10000
-             else: return -1000 # 提前打进黑8判负
-
-        # 检查下一杆
-        cue_pos = final_cue.state.rvw[0]
-        R = final_cue.params.R
-        
-        remaining = [b for b in my_targets if b not in pocketed_ids and final_balls[b].state.s != 4]
-        if not remaining: remaining = ['8'] # 准备打黑8
-
-        best_next_shot = 0
-        for bid in remaining:
-            b_pos = final_balls[bid].state.rvw[0]
-            for pid, pocket in self._get_pockets(shot.table).items():
-                _, cut, dist = self._calculate_ghost_ball_params(cue_pos, b_pos, pocket.center, R)
-                # 简单的下一杆质量评分
-                if cut < 50:
-                    quality = (60 - cut) + (1.0 - abs(dist - 1.0))*20
-                    if quality > best_next_shot: best_next_shot = quality
-        
-        return score + best_next_shot * 0.5
-
     def _generate_safety_shot(self, balls, my_targets):
         """
         防守策略：当没有好机会时，轻轻碰一下离得最近的球，避免犯规
@@ -510,7 +418,7 @@ class MCTSAgent(Agent):
         for ball_id in remaining_own:
             obj_pos = balls[ball_id].state.rvw[0]
             for pid, pocket in table.pockets.items():
-                phi_ideal, cut_angle, dist = self._calculate_ghost_ball_params(cue_pos, obj_pos, pocket.center, R)
+                phi_ideal, cut_angle, dist = calculate_ghost_ball_params(cue_pos, obj_pos, pocket.center, R)
                 
                 # 只有非常难打的球才会被过滤 (阈值 85度)
                 if abs(cut_angle) > 85: continue
@@ -557,7 +465,7 @@ class MCTSAgent(Agent):
                     
                     try:
                         pt.simulate(shot, inplace=True)
-                        score = self.evaluate_state(shot, my_targets, cand['target_id'])
+                        score = evaluate_state(shot, my_targets, cand['target_id'])
                         
                         if score > best_score:
                             best_score = score
@@ -599,9 +507,6 @@ class BankAgent(Agent):
         super().__init__()
         logger.info("BankAgent 已初始化 - 具备翻袋攻击能力")
 
-    def _get_pockets(self, table):
-        return table.pockets
-
     def _get_table_rails(self, table):
         """获取4个库边的坐标位置"""
         # table.w 是宽 (y轴方向), table.l 是长 (x轴方向)
@@ -625,93 +530,6 @@ class BankAgent(Agent):
         elif rail_name == 'right':
             return np.array([2 * rails['right'] - px, py, 0])
         return None
-
-    def _calculate_ghost_ball_params(self, cue_pos, obj_pos, target_pos, R):
-        """
-        计算几何参数 (Ghost Ball)
-        target_pos 可以是真实袋口，也可以是虚拟袋口(用于翻袋)
-        """
-        target_vec = np.array([target_pos[0], target_pos[1], 0])
-        obj_vec = np.array([obj_pos[0], obj_pos[1], 0])
-        
-        # 向量：目标球 -> 目标点(袋口/虚拟袋口)
-        vec_obj_target = target_vec - obj_vec 
-        dist_obj_target = np.linalg.norm(vec_obj_target)
-        vec_obj_target_unit = vec_obj_target / (dist_obj_target + 1e-6)
-        
-        # 假想球位置：目标球中心沿进球线反向延伸 2R
-        ghost_pos = obj_vec - vec_obj_target_unit * (2 * R)
-        
-        # 瞄准向量：母球 -> 假想球
-        cue_vec_3d = np.array([cue_pos[0], cue_pos[1], 0])
-        aim_vec = ghost_pos - cue_vec_3d
-        
-        # 计算角度 phi
-        phi = np.degrees(np.arctan2(aim_vec[1], aim_vec[0])) % 360
-        
-        # 计算切角 (Cut Angle)
-        vec_cue_obj = obj_vec - cue_vec_3d
-        norm_co = np.linalg.norm(vec_cue_obj)
-        
-        if norm_co == 0: return phi, 180, 1000
-        
-        cos_theta = np.dot(vec_cue_obj, vec_obj_target) / (norm_co * dist_obj_target + 1e-6)
-        cut_angle = np.degrees(np.arccos(np.clip(cos_theta, -1, 1)))
-        
-        return phi, cut_angle, norm_co
-
-    def evaluate_state(self, shot, my_targets, original_target_id):
-        """改进的评分函数"""
-        if not shot.events: 
-            return -1000
-        
-        pocketed_ids = []
-        cue_scratch = False
-        
-        for event in shot.events:
-            # 兼容性写法
-            if event.event_type.name == 'POCKETED':
-                pocketed_ids.extend(event.agents)
-        
-        if 'cue' in pocketed_ids: cue_scratch = True
-        if shot.balls['cue'].state.s == 4: cue_scratch = True
-
-        if cue_scratch: return -500
-        
-        # 进攻结果判定
-        score = 0
-        if original_target_id in pocketed_ids:
-            score += 100 
-        elif any(bid in my_targets for bid in pocketed_ids):
-            score += 80 
-        else:
-            return -50 
-
-        # 走位评估
-        final_balls = shot.balls
-        final_cue = final_balls['cue']
-        
-        if original_target_id == '8':
-             others = [b for b in my_targets if b != '8' and final_balls[b].state.s != 4]
-             if not others: return 10000
-             else: return -1000 
-
-        cue_pos = final_cue.state.rvw[0]
-        R = final_cue.params.R
-        
-        remaining = [b for b in my_targets if b not in pocketed_ids and final_balls[b].state.s != 4]
-        if not remaining: remaining = ['8']
-
-        best_next_shot = 0
-        for bid in remaining:
-            b_pos = final_balls[bid].state.rvw[0]
-            for pid, pocket in self._get_pockets(shot.table).items():
-                _, cut, dist = self._calculate_ghost_ball_params(cue_pos, b_pos, pocket.center, R)
-                if cut < 50:
-                    quality = (60 - cut) + (1.0 - abs(dist - 1.0))*20
-                    if quality > best_next_shot: best_next_shot = quality
-        
-        return score + best_next_shot * 0.5
 
     def _generate_safety_shot(self, balls, my_targets):
         """防守策略"""
@@ -757,7 +575,7 @@ class BankAgent(Agent):
                     virtual_pos = self._get_virtual_pocket(pocket.center, rail_name, rails)
                     
                     # 几何计算：把虚拟袋口当做目标
-                    phi_ideal, cut_angle, dist_cue_obj = self._calculate_ghost_ball_params(
+                    phi_ideal, cut_angle, dist_cue_obj = calculate_ghost_ball_params(
                         cue_pos, obj_pos, virtual_pos, R
                     )
                     
@@ -794,7 +612,7 @@ class BankAgent(Agent):
         for ball_id in remaining_own:
             obj_pos = balls[ball_id].state.rvw[0]
             for pid, pocket in table.pockets.items():
-                phi_ideal, cut_angle, dist = self._calculate_ghost_ball_params(cue_pos, obj_pos, pocket.center, R)
+                phi_ideal, cut_angle, dist = calculate_ghost_ball_params(cue_pos, obj_pos, pocket.center, R)
                 
                 if abs(cut_angle) > 85: continue
                 
@@ -860,7 +678,7 @@ class BankAgent(Agent):
                     
                     try:
                         pt.simulate(shot, inplace=True)
-                        score = self.evaluate_state(shot, my_targets, cand['target_id'])
+                        score = evaluate_state(shot, my_targets, cand['target_id'])
                         
                         if score > best_score:
                             best_score = score
@@ -940,59 +758,6 @@ class LearningAgent(Agent):
             return {'V0': 0.8, 'phi': phi, 'theta': 0, 'a': 0, 'b': 0}
 
         return self._random_action()
-    
-    def evaluate_state(self, shot, my_targets, original_target_id):
-        """改进的评分函数"""
-        if not shot.events: 
-            return -1000
-        
-        pocketed_ids = []
-        cue_scratch = False
-        
-        for event in shot.events:
-            # 兼容性写法
-            if event.event_type.name == 'POCKETED':
-                pocketed_ids.extend(event.agents)
-        
-        if 'cue' in pocketed_ids: cue_scratch = True
-        if shot.balls['cue'].state.s == 4: cue_scratch = True
-
-        if cue_scratch: return -500
-        
-        # 进攻结果判定
-        score = 0
-        if original_target_id in pocketed_ids:
-            score += 100 
-        elif any(bid in my_targets for bid in pocketed_ids):
-            score += 80 
-        # else:
-        #     return -50 
-
-        # 走位评估
-        final_balls = shot.balls
-        final_cue = final_balls['cue']
-        
-        if original_target_id == '8':
-             others = [b for b in my_targets if b != '8' and final_balls[b].state.s != 4]
-             if not others: return 10000
-             else: return -1000 
-
-        cue_pos = final_cue.state.rvw[0]
-        R = final_cue.params.R
-        
-        remaining = [b for b in my_targets if b not in pocketed_ids and final_balls[b].state.s != 4]
-        if not remaining: remaining = ['8']
-
-        best_next_shot = 0
-        for bid in remaining:
-            b_pos = final_balls[bid].state.rvw[0]
-            for pid, pocket in self._get_pockets(shot.table).items():
-                _, cut, dist = self._calculate_ghost_ball_params(cue_pos, b_pos, pocket.center, R)
-                if cut < 50:
-                    quality = (60 - cut) + (1.0 - abs(dist - 1.0))*20
-                    if quality > best_next_shot: best_next_shot = quality
-        
-        return score + best_next_shot * 0.5
 
     def decision(self, balls=None, my_targets=None, table=None):
         if balls is None:
@@ -1047,7 +812,7 @@ class LearningAgent(Agent):
 
                 try:
                     pt.simulate(shot, inplace=True)
-                    score = self.evaluate_state(shot, my_targets, cand['target_id'])
+                    score = evaluate_state(shot, my_targets, cand['target_id'])
 
                     if score > best_score:
                         best_score = score
