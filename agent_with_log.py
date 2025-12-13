@@ -340,7 +340,8 @@ class NewAgent(Agent):
     
     def __init__(self):
         model_path = os.path.join('train', 'checkpoints', 'aim_model.pth')
-        self.agent = HybridLearningAgent(model_path)
+        #self.agent = HybridLearningAgent(model_path)
+        self.agent = MCTSAgent()
     
     def decision(self, balls=None, my_targets=None, table=None):
         """决策方法
@@ -368,6 +369,7 @@ class MCTSAgent(Agent):
     3. 没有学习过程, 比较省时
 
     成绩: 29.0/40.0, 0.725
+          换用analyze_shot_for_reward后为 32.0/40.0, 0.800 
     """
     def __init__(self):
         super().__init__()
@@ -411,6 +413,7 @@ class MCTSAgent(Agent):
         cue_pos = cue_ball.state.rvw[0]
         R = cue_ball.params.R
 
+        last_state_snapshot = {bid: copy.deepcopy(ball) for bid, ball in balls.items()}
         # --- 1. 生成几何候选 (Candidates) ---
         candidates = [] 
         remaining_own = [bid for bid in my_targets if balls[bid].state.s != 4]
@@ -466,13 +469,14 @@ class MCTSAgent(Agent):
                     
                     try:
                         pt.simulate(shot, inplace=True)
-                        score = evaluate_state(shot, my_targets, cand['target_id'])
+                        #score = evaluate_state(shot, my_targets, cand['target_id'])
+                        score = analyze_shot_for_reward(shot, last_state_snapshot, my_targets)
                         
                         if score > best_score:
                             best_score = score
                             best_action = {'V0': V0, 'phi': phi_try, 'theta': 0, 'a': 0, 'b': 0}
                             # 如果找到了必进球且走位不错的解，可以提前剪枝
-                            if score > 120: 
+                            if score >= 50: 
                                 logger.info("[MCTSAgent] 找到绝佳线路！(Score: %.1f)", score)
                                 return best_action
                                 
@@ -715,6 +719,8 @@ class HybridLearningAgent(Agent):
     1. 使用神经网络预测偏差，大幅缩小搜索范围。
     2. 在预测值附近进行微小范围的模拟验证（解决物理噪声）。
     3. 如果进攻模拟全部失败，严格执行防守（解决乱打问题）。
+   
+    成绩：换用analyze_shot_for_reward后 23.0/40.0 0.575
     """
     def __init__(self, model_path='checkpoints/aim_model.pth'):
         super().__init__()
@@ -783,6 +789,8 @@ class HybridLearningAgent(Agent):
         cue_pos = cue_ball.state.rvw[0]
         R = cue_ball.params.R
 
+        
+        last_state_snapshot = {bid: copy.deepcopy(ball) for bid, ball in balls.items()}
         # --- 1. 筛选候选球 ---
         candidates = []
         remaining = [bid for bid in my_targets if balls[bid].state.s != 4]
@@ -836,7 +844,7 @@ class HybridLearningAgent(Agent):
                     
                     try:
                         pt.simulate(shot, inplace=True)
-                        score = evaluate_state(shot, my_targets, cand['target_id'])
+                        score = analyze_shot_for_reward(shot, last_state_snapshot, my_targets)
                         
                         # 如果是好结果
                         if score > best_score:
