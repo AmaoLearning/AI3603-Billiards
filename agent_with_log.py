@@ -737,9 +737,9 @@ class HybridLearningAgent(Agent):
         """调用神经网络预测修正量"""
         if not self.use_nn: return 0.0
 
-        c_norm = cut_angle / cut_angle.max()
-        d_norm = distance / distance.max()
-        v_norm = V0 / V0.max()
+        c_norm = cut_angle / 90.0
+        d_norm = distance / 2.05
+        v_norm = V0 / 8.0
         
         inputs = torch.tensor([[c_norm, d_norm, v_norm]], dtype=torch.float32).to(self.device)
         
