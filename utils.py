@@ -37,55 +37,42 @@ def calculate_ghost_ball_params(cue_pos, obj_pos, pocket_pos, R):
 def get_pockets(table):
         return table.pockets
 
-def evaluate_state(shot, my_targets, original_target_id):
-        """改进的评分函数"""
-        if not shot.events: 
-            return -1000
+def evaluate_state(self, shot, my_targets, original_target_id):
+        # 1. 空杆或未发生事件 -> 极刑
+        if not shot.events: return -1000
         
         pocketed_ids = []
         cue_scratch = False
         
+        # 兼容性写法获取进球事件
         for event in shot.events:
-            # 兼容性写法
-            if event.event_type.name == 'POCKETED':
+            event_name = event.event_type.name if hasattr(event.event_type, 'name') else str(event.event_type)
+            if 'POCKETED' in event_name:
                 pocketed_ids.extend(event.agents)
         
+        # 母球落袋 -> 极刑
         if 'cue' in pocketed_ids: cue_scratch = True
         if shot.balls['cue'].state.s == 4: cue_scratch = True
-
-        if cue_scratch: return -500
         
-        # 进攻结果判定
+        if cue_scratch: return -1000 # 绝对不能选会导致母球落袋的线路
+        
+        # 2. 进攻结果
         score = 0
         if original_target_id in pocketed_ids:
-            score += 100 
+            score += 100
         elif any(bid in my_targets for bid in pocketed_ids):
-            score += 80 
-        # else:
-        #     return -50 
+            score += 60 # 运气球分低一点，鼓励打指定球
+        else:
+            # 没进球 -> 负分，告诉 Agent 这是一个失败的尝试 # 注释这一部分会导致母球掉袋的情况变多
+            return -50 
 
-        # 走位评估
-        final_balls = shot.balls
-        final_cue = final_balls['cue']
-        
-        if original_target_id == '8':
-             others = [b for b in my_targets if b != '8' and final_balls[b].state.s != 4]
-             if not others: return 10000
-             else: return -1000 
-
-        cue_pos = final_cue.state.rvw[0]
-        R = final_cue.params.R
-        
-        remaining = [b for b in my_targets if b not in pocketed_ids and final_balls[b].state.s != 4]
-        if not remaining: remaining = ['8']
-
-        best_next_shot = 0
-        for bid in remaining:
-            b_pos = final_balls[bid].state.rvw[0]
-            for pid, pocket in get_pockets(shot.table).items():
-                _, cut, dist = calculate_ghost_ball_params(cue_pos, b_pos, pocket.center, R)
-                if cut < 50:
-                    quality = (60 - cut) + (1.0 - abs(dist - 1.0))*20
-                    if quality > best_next_shot: best_next_shot = quality
-        
-        return score + best_next_shot * 0.5
+        # 3. 简单走位 (如果进球了)
+        final_cue = shot.balls['cue']
+        if final_cue.state.s != 4:
+            # 鼓励母球停在台面中央，不要贴库
+            # 简单启发式：离中心越近越好
+            cue_pos = final_cue.state.rvw[0]
+            dist_to_center = np.linalg.norm(cue_pos[:2])
+            score += (1.0 - dist_to_center / 1.0) * 10 
+            
+        return score
