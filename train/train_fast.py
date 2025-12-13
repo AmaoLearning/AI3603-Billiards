@@ -17,7 +17,6 @@ class AimNet(nn.Module):
             nn.Linear(3, 256),        # 输入 -> 256
             nn.BatchNorm1d(256),
             nn.ReLU(),
-            nn.Dropout(0.1),          # 防止过拟合
             
             nn.Linear(256, 128),      # 256 -> 128
             nn.BatchNorm1d(128),
@@ -57,10 +56,9 @@ def train_fast():
     X = df[['cut_angle', 'distance', 'V0']].values.astype(np.float32)
     y = df[['label_delta']].values.astype(np.float32)
     
-    # 归一化 (根据 smart_aim_data_v2 的生成范围)
-    X[:, 0] /= 80.0  # Cut Angle 0-80
-    X[:, 1] /= 1.5   # Distance 0.2-1.5
-    X[:, 2] /= 7.5   # V0 2.0-7.5
+    X[:, 0] /= df['cut_angle'].max()  
+    X[:, 1] /= df['distance'].max()
+    X[:, 2] /= df['V0'].max()
     
     X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.1, random_state=42)
     

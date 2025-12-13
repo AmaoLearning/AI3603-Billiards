@@ -340,7 +340,7 @@ class NewAgent(Agent):
     
     def __init__(self):
         model_path = os.path.join('train', 'checkpoints', 'aim_model.pth')
-        self.agent = LearningAgent(model_path)
+        self.agent = HybridLearningAgent(model_path)
     
     def decision(self, balls=None, my_targets=None, table=None):
         """决策方法
@@ -708,128 +708,157 @@ class BankAgent(Agent):
     def _random_action(self):
         return {'V0': 1.0, 'phi': np.random.uniform(0,360), 'theta':0, 'a':0, 'b':0}
 
-
-class LearningAgent(Agent):
-    """Neural-correction aiming agent mirroring agent.py implementation with logging."""
-
-    def __init__(self, model_path='aim_model.pth'):
+class HybridLearningAgent(Agent):
+    """
+    混合智能体：神经网络引导 + 局部搜索验证
+    策略：
+    1. 使用神经网络预测偏差，大幅缩小搜索范围。
+    2. 在预测值附近进行微小范围的模拟验证（解决物理噪声）。
+    3. 如果进攻模拟全部失败，严格执行防守（解决乱打问题）。
+    """
+    def __init__(self, model_path='checkpoints/aim_model.pth'):
         super().__init__()
         self.model = AimNet()
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        
         try:
-            self.model.load_state_dict(torch.load(model_path))
+            # 加载模型
+            state_dict = torch.load(model_path, map_location=self.device)
+            self.model.load_state_dict(state_dict)
+            self.model.to(self.device)
             self.model.eval()
-            logger.info("LearningAgent: 神经网络模型加载成功！")
-        except Exception:
-            logger.warning("LearningAgent: 未找到模型文件，将回退到纯几何模式。")
-            self.model = None
+            logger.info(f"[HybridAgent] 神经网络加载成功: {model_path}")
+            self.use_nn = True
+        except Exception as e:
+            logger.info(f"[HybridAgent] 模型加载失败 ({e})，回退到纯几何搜索模式。")
+            self.use_nn = False
+
+    def _get_pockets(self, table):
+        return table.pockets
 
     def _predict_correction(self, cut_angle, distance, V0):
-        if self.model is None:
-            return 0.0
+        """调用神经网络预测修正量"""
+        if not self.use_nn: return 0.0
 
-        inputs = np.array([cut_angle / 90.0, distance / 2.0, V0 / 10.0], dtype=np.float32)
-        inputs_tensor = torch.from_numpy(inputs).unsqueeze(0)
-
+        c_norm = cut_angle / cut_angle.max()
+        d_norm = distance / distance.max()
+        v_norm = V0 / V0.max()
+        
+        inputs = torch.tensor([[c_norm, d_norm, v_norm]], dtype=torch.float32).to(self.device)
+        
         with torch.no_grad():
-            delta_phi = self.model(inputs_tensor).item()
-        return delta_phi
+            delta = self.model(inputs).item()
+        return delta
 
     def _generate_safety_shot(self, balls, my_targets):
-        logger.info("[LearningAgent] 启动防守模式 (Safety Mode)")
+        """防守策略：必须碰库"""
+        logger.info("[HybridAgent] 进攻不可行，切换强力防守。")
         cue_pos = balls['cue'].state.rvw[0]
         min_dist = float('inf')
         best_target = None
-
+        
         candidates = [b for b in my_targets if balls[b].state.s != 4]
-        if not candidates:
-            candidates = ['8']
-
+        if not candidates: candidates = ['8']
+        
+        # 找最近的球
         for bid in candidates:
             obj_pos = balls[bid].state.rvw[0]
             dist = np.linalg.norm(np.array(obj_pos[:2]) - np.array(cue_pos[:2]))
             if dist < min_dist:
                 min_dist = dist
                 best_target = bid
-
+        
         if best_target:
             obj_pos = balls[best_target].state.rvw[0]
             dx = obj_pos[0] - cue_pos[0]
             dy = obj_pos[1] - cue_pos[1]
             phi = np.degrees(np.arctan2(dy, dx)) % 360
-            return {'V0': 0.8, 'phi': phi, 'theta': 0, 'a': 0, 'b': 0}
-
-        return self._random_action()
+            # 力度 3.0，确保碰库不犯规
+            return {'V0': 3.0, 'phi': phi, 'theta': 0, 'a': 0, 'b': 0}
+        
+        # 实在没办法，随机打
+        return {'V0': 1.0, 'phi': 0, 'theta':0, 'a':0, 'b':0}
 
     def decision(self, balls=None, my_targets=None, table=None):
-        if balls is None:
-            return self._random_action()
-
+        if balls is None: return self._generate_safety_shot(balls, my_targets)
+        
         cue_ball = balls['cue']
         cue_pos = cue_ball.state.rvw[0]
         R = cue_ball.params.R
 
+        # --- 1. 筛选候选球 ---
         candidates = []
-        remaining = [b for b in my_targets if balls[b].state.s != 4]
-        if not remaining:
-            remaining = ['8']
-
-        # 1. 快速几何筛选
+        remaining = [bid for bid in my_targets if balls[bid].state.s != 4]
+        if not remaining: remaining = ['8']
+        
         for ball_id in remaining:
             obj_pos = balls[ball_id].state.rvw[0]
             for pid, pocket in table.pockets.items():
                 phi_geo, cut_angle, dist = calculate_ghost_ball_params(cue_pos, obj_pos, pocket.center, R)
-                if abs(cut_angle) > 85:
-                    continue
-
+                # 严格过滤 > 85 度的球
+                if abs(cut_angle) > 85: continue
+                
                 candidates.append({
                     'target_id': ball_id,
                     'phi_geo': phi_geo,
                     'cut_angle': cut_angle,
-                    'distance': dist,
-                    'pocket_id': pid
+                    'distance': dist
                 })
-
-        if not candidates:
-            return self._generate_safety_shot(balls, my_targets)
-
-        candidates.sort(key=lambda x: x['cut_angle'] + x['distance'] * 10)
+        
+        # 排序：优先切角小、距离近
+        candidates.sort(key=lambda x: x['cut_angle'] + x['distance']*10)
+        top_candidates = candidates[:4] # 只看最好的4个
 
         best_action = None
-        best_score = -float('inf')
+        best_score = 0 # 【关键修复】: 初始分数设为0，任何负分(没进)都不会被选中
 
-        # 2. 神经网络辅助决策（仅评估前三个候选）
-        for cand in candidates[:3]:
+        # --- 2. 混合搜索 (Neural Guide + Local Search) ---
+        for cand in top_candidates:
+            # 尝试几种力度
             speeds = [3.0, 5.0, 7.0]
-
+            
             for V0 in speeds:
-                delta_phi = self._predict_correction(cand['cut_angle'], cand['distance'], V0)
-                phi_final = cand['phi_geo'] + delta_phi
+                # Step A: 神经网络预测偏差
+                delta_pred = self._predict_correction(cand['cut_angle'], cand['distance'], V0)
+                phi_center = cand['phi_geo'] + delta_pred
+                
+                # Step B: 局部微调 (Local Grid Search)
+                # 既然网络可能有误差，我们在预测值左右 0.5度 内再扫 5 个点
+                # 这样既利用了网络的先验，又解决了物理噪声
+                offsets = np.linspace(-0.5, 0.5, 5) 
+                
+                for off in offsets:
+                    phi_try = phi_center + off
+                    
+                    # 模拟
+                    sim_balls = {bid: copy.deepcopy(ball) for bid, ball in balls.items()}
+                    sim_table = copy.deepcopy(table)
+                    cue = pt.Cue(cue_ball_id="cue")
+                    cue.set_state(V0=V0, phi=phi_try, theta=0, a=0, b=0)
+                    shot = pt.System(table=sim_table, balls=sim_balls, cue=cue)
+                    
+                    try:
+                        pt.simulate(shot, inplace=True)
+                        score = self.evaluate_state(shot, my_targets, cand['target_id'])
+                        
+                        # 如果是好结果
+                        if score > best_score:
+                            best_score = score
+                            best_action = {'V0': V0, 'phi': phi_try, 'theta': 0, 'a': 0, 'b': 0}
+                            
+                            # 提前剪枝：如果已经稳进球了，不用再搜了
+                            if score > 80: 
+                                logger.info(f"[Hybrid] 🎯 命中! NN偏:{delta_pred:.2f} | 微调:{off:.2f} | Score:{score:.1f}")
+                                return best_action
+                                
+                    except: continue
 
-                sim_balls = {bid: copy.deepcopy(ball) for bid, ball in balls.items()}
-                sim_table = copy.deepcopy(table)
-                cue = pt.Cue(cue_ball_id="cue")
-                cue.set_state(V0=V0, phi=phi_final, theta=0, a=0, b=0)
-                shot = pt.System(table=sim_table, balls=sim_balls, cue=cue)
-
-                try:
-                    pt.simulate(shot, inplace=True)
-                    score = evaluate_state(shot, my_targets, cand['target_id'])
-
-                    if score > best_score:
-                        best_score = score
-                        best_action = {'V0': V0, 'phi': phi_final, 'theta': 0, 'a': 0, 'b': 0}
-
-                        if score > 100:
-                            logger.info("[LearningAgent] Neural Correction Applied: %.2f°", delta_phi)
-                            return best_action
-                except Exception as e:
-                    logger.error("[LearningAgent] Simulation failed: %s", e)
-                    continue
-
-        if best_action:
-            logger.info(f"[LearningAgent] 决策: V0={best_action['V0']:.1f}, phi={best_action['phi']:.1f} (ExpScore:{best_score:.1f})")
+        # --- 3. 决策 ---
+        if best_action is not None and best_score > 0:
+            logger.info(f"[Hybrid] 决策: V0={best_action['V0']:.1f}, phi={best_action['phi']:.1f} (ExpScore:{best_score:.1f})")
             return best_action
-
-        logger.info("[LearningAgent] 模型与几何均未找到进球方案，转为防守。")
+        
+        # 如果模拟了一圈，分数全是 -50 或 -1000，说明根本进不去
+        # 【关键修复】: 绝对不选那些 -50 的动作，转为防守
+        logger.info(f"[Hybrid] 进攻模拟全失败 (BestScore: {best_score})，转为防守。")
         return self._generate_safety_shot(balls, my_targets)
-
