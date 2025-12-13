@@ -294,7 +294,7 @@ class BasicAgent(Agent):
 
                 return score
 
-            logger.info("[BasicAgent] 正在为 Player (targets: %s) 搜索最佳击球...", my_targets)
+            logger.info("[BasicAgent] 正在为 Player (targets: %s) 搜索最佳击球...", remaining_own)
             
             seed = np.random.randint(1e6)
             optimizer = self._create_optimizer(reward_fn_wrapper, seed)
@@ -369,7 +369,8 @@ class MCTSAgent(Agent):
     3. 没有学习过程, 比较省时
 
     成绩: 29.0/40.0, 0.725
-          换用analyze_shot_for_reward后为 32.0/40.0, 0.800 
+          换用analyze_shot_for_reward后为 32.0/40.0, 0.800
+          走位评分版本1 25.0/40.0, 0.625
     """
     def __init__(self):
         super().__init__()
@@ -418,6 +419,8 @@ class MCTSAgent(Agent):
         candidates = [] 
         remaining_own = [bid for bid in my_targets if balls[bid].state.s != 4]
         if not remaining_own: remaining_own = ['8']
+
+        logger.info("[MCTSAgent] 正在为 Player (targets: %s) 搜索最佳击球...", remaining_own)
 
         for ball_id in remaining_own:
             obj_pos = balls[ball_id].state.rvw[0]
@@ -475,8 +478,11 @@ class MCTSAgent(Agent):
                             best_score = score
                             best_action = {'V0': V0, 'phi': phi_try, 'theta': 0, 'a': 0, 'b': 0}
                             # 如果找到了必进球且走位不错的解，可以提前剪枝
-                            if score >= 60: 
-                                logger.info("[MCTSAgent] 找到绝佳线路！(Score: %.1f)", score)
+                            if score >= 80: 
+                                logger.info("[MCTSAgent] 找到绝佳线路！决策: V0=%.1f, phi=%.1f (ExpScore:%.1f)",
+                                                best_action['V0'],
+                                                best_action['phi'],
+                                                best_score,)
                                 return best_action
                                 
                     except Exception as e:
