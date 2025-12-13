@@ -733,9 +733,6 @@ class HybridLearningAgent(Agent):
             logger.info(f"[HybridAgent] 模型加载失败 ({e})，回退到纯几何搜索模式。")
             self.use_nn = False
 
-    def _get_pockets(self, table):
-        return table.pockets
-
     def _predict_correction(self, cut_angle, distance, V0):
         """调用神经网络预测修正量"""
         if not self.use_nn: return 0.0
@@ -839,7 +836,7 @@ class HybridLearningAgent(Agent):
                     
                     try:
                         pt.simulate(shot, inplace=True)
-                        score = self.evaluate_state(shot, my_targets, cand['target_id'])
+                        score = evaluate_state(shot, my_targets, cand['target_id'])
                         
                         # 如果是好结果
                         if score > best_score:
