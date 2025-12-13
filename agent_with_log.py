@@ -469,14 +469,13 @@ class MCTSAgent(Agent):
                     
                     try:
                         pt.simulate(shot, inplace=True)
-                        #score = evaluate_state(shot, my_targets, cand['target_id'])
-                        score = analyze_shot_for_reward(shot, last_state_snapshot, my_targets)
+                        score = evaluate_state(shot, last_state_snapshot, my_targets)
                         
                         if score > best_score:
                             best_score = score
                             best_action = {'V0': V0, 'phi': phi_try, 'theta': 0, 'a': 0, 'b': 0}
                             # 如果找到了必进球且走位不错的解，可以提前剪枝
-                            if score >= 50: 
+                            if score >= 60: 
                                 logger.info("[MCTSAgent] 找到绝佳线路！(Score: %.1f)", score)
                                 return best_action
                                 
@@ -844,7 +843,7 @@ class HybridLearningAgent(Agent):
                     
                     try:
                         pt.simulate(shot, inplace=True)
-                        score = analyze_shot_for_reward(shot, last_state_snapshot, my_targets)
+                        score = evaluate_state(shot, last_state_snapshot, my_targets)
                         
                         # 如果是好结果
                         if score > best_score:
