@@ -341,7 +341,8 @@ class NewAgent(Agent):
     def __init__(self):
         model_path = os.path.join('train', 'checkpoints', 'aim_model.pth')
         #self.agent = HybridLearningAgent(model_path)
-        self.agent = MCTSAgent()
+        # self.agent = MCTSAgent()
+        self.agent = BayesMCTSAgent()
     
     def decision(self, balls=None, my_targets=None, table=None):
         """决策方法
@@ -872,3 +873,183 @@ class HybridLearningAgent(Agent):
         # 【关键修复】: 绝对不选那些 -50 的动作，转为防守
         logger.info(f"[Hybrid] 进攻模拟全失败 (BestScore: {best_score})，转为防守。")
         return self._generate_safety_shot(balls, my_targets)
+
+class BayesMCTSAgent(BasicAgent):
+    """基于贝叶斯优化的智能MCTS Agent"""
+    
+    def __init__(self, target_balls=None):
+        """初始化 Agent
+        
+        参数：
+            target_balls: 保留参数，暂未使用
+        """
+        super().__init__()
+        
+        # 搜索空间
+        self.pbounds = {
+            'V0': (0.5, 8.0),
+            'phi': (-5, 5),
+            'theta': (0, 90), 
+            'a': (-0.5, 0.5),
+            'b': (-0.5, 0.5)
+        }
+        
+        # 优化参数
+        self.INITIAL_SEARCH = 20
+        self.OPT_SEARCH = 10
+        self.ALPHA = 1e-2
+        
+        # 模拟噪声（可调整以改变训练难度）
+        self.noise_std = {
+            'V0': 0.1,
+            'phi': 0.1,
+            'theta': 0.1,
+            'a': 0.003,
+            'b': 0.003
+        }
+        self.enable_noise = False
+        
+        logger.info("[BayesMCTS] (Smart, pooltool-native) 已初始化。")
+
+    def decision(self, balls=None, my_targets=None, table=None):
+        """使用贝叶斯优化搜索最佳击球参数
+        
+        参数：
+            balls: 球状态字典，{ball_id: Ball}
+            my_targets: 目标球ID列表，['1', '2', ...]
+            table: 球桌对象
+        
+        返回：
+            dict: 击球动作 {'V0', 'phi', 'theta', 'a', 'b'}
+                失败时返回随机动作
+        """
+        if balls is None:
+            logger.info("[BayesMCTS] Agent decision函数未收到balls关键信息，使用随机动作。")
+            return self._random_action()
+        try:
+            
+            # 保存一个击球前的状态快照，用于对比
+            last_state_snapshot = {bid: copy.deepcopy(ball) for bid, ball in balls.items()}
+
+            remaining_own = [bid for bid in my_targets if balls[bid].state.s != 4]
+            if len(remaining_own) == 0:
+                my_targets = ["8"]
+                logger.info("[BayesMCTS] 我的目标球已全部清空，自动切换目标为：8号球")
+            
+            candidates = []
+            cue_ball = balls['cue']
+            cue_pos = cue_ball.state.rvw[0]
+            R = cue_ball.params.R
+
+            logger.info("[BayesMCTS] 正在为 Player (targets: %s) 搜索最佳击球...", remaining_own)
+            for ball_id in remaining_own:
+                obj_pos = balls[ball_id].state.rvw[0]
+                for pid, pocket in table.pockets.items():
+                    phi_ideal, cut_angle, dist = calculate_ghost_ball_params(cue_pos, obj_pos, pocket.center, R)
+                    
+                    # 只有非常难打的球才会被过滤 (阈值 85度)
+                    if abs(cut_angle) > 85: continue
+                    
+                    candidates.append({
+                        'target_id': ball_id,
+                        'phi_center': phi_ideal,
+                        'cut_angle': cut_angle,
+                        'distance': dist
+                    })
+            
+            candidates.sort(key=lambda x: x['cut_angle'])
+            top_candidates = candidates[:2]
+
+            top_action = None
+            top_score = -float('inf')
+
+            for cand in top_candidates:
+                # 1.动态创建“奖励函数” (Wrapper)
+                # 贝叶斯优化器会调用此函数，并传入参数
+                def reward_fn_wrapper(V0, phi, theta, a, b):
+                    # 创建一个用于模拟的沙盒系统
+                    sim_balls = {bid: copy.deepcopy(ball) for bid, ball in balls.items()}
+                    sim_table = copy.deepcopy(table)
+                    cue = pt.Cue(cue_ball_id="cue")
+
+                    shot = pt.System(table=sim_table, balls=sim_balls, cue=cue)
+                    
+                    try:
+                        if self.enable_noise:
+                            V0_noisy = V0 + np.random.normal(0, self.noise_std['V0'])
+                            phi_noisy = phi + cand['phi_center'] + np.random.normal(0, self.noise_std['phi'])
+                            theta_noisy = theta + np.random.normal(0, self.noise_std['theta'])
+                            a_noisy = a + np.random.normal(0, self.noise_std['a'])
+                            b_noisy = b + np.random.normal(0, self.noise_std['b'])
+                            
+                            V0_noisy = np.clip(V0_noisy, 0.5, 8.0)
+                            phi_noisy = phi_noisy % 360
+                            theta_noisy = np.clip(theta_noisy, 0, 90)
+                            a_noisy = np.clip(a_noisy, -0.5, 0.5)
+                            b_noisy = np.clip(b_noisy, -0.5, 0.5)
+                            
+                            shot.cue.set_state(V0=V0_noisy, phi=phi_noisy, theta=theta_noisy, a=a_noisy, b=b_noisy)
+                        else:
+                            shot.cue.set_state(V0=V0, phi=phi, theta=theta, a=a, b=b)
+                        
+                        # 关键：使用 pooltool 物理引擎 (世界A)
+                        pt.simulate(shot, inplace=True)
+                    except Exception as e:
+                        # 模拟失败，给予极大惩罚
+                        return -500
+                    
+                    # 使用我们的“裁判”来打分
+                    score = analyze_shot_for_reward(
+                        shot=shot,
+                        last_state=last_state_snapshot,
+                        player_targets=my_targets
+                    )
+
+                    return score
+
+
+                seed = np.random.randint(1e6)
+                optimizer = self._create_optimizer(reward_fn_wrapper, seed)
+                optimizer.maximize(
+                    init_points=self.INITIAL_SEARCH,
+                    n_iter=self.OPT_SEARCH
+                )
+                
+                best_result = optimizer.max
+                best_params = best_result['params']
+                best_score = best_result['target']
+
+                final_phi = (float(best_params['phi']) + phi_ideal) % 360
+
+                action = {
+                    'V0': float(best_params['V0']),
+                    'phi': final_phi,
+                    'theta': float(best_params['theta']),
+                    'a': float(best_params['a']),
+                    'b': float(best_params['b']),
+                }
+
+                if best_score > top_score:
+                    top_score = best_score
+                    top_action = action
+
+            if top_score < 10:
+                logger.info("[BayesMCTS] 未找到好的方案 (最高分: %.2f)。使用随机动作。", best_score)
+                return self._random_action()
+            
+            logger.info(
+                "[BayesMCTS] 决策 (得分: %.2f): V0=%.2f, phi=%.2f, θ=%.2f, a=%.3f, b=%.3f",
+                top_score,
+                top_action['V0'],
+                final_phi,
+                top_action['theta'],
+                top_action['a'],
+                top_action['b'],
+            )
+            return top_action
+
+        except Exception as e:
+            logger.error("[BayesMCTS] 决策时发生严重错误，使用随机动作。原因: %s", e)
+            import traceback
+            logger.exception(e)
+            return self._random_action()
