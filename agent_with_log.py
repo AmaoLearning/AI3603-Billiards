@@ -890,7 +890,7 @@ class BayesMCTSAgent(BasicAgent):
         # 搜索空间
         self.pbounds = {
             'V0': (0.5, 8.0),
-            'd_phi': (-5, 5),
+            'd_phi': (-3, 3),
             'theta': (0, 90), 
             'a': (-0.5, 0.5),
             'b': (-0.5, 0.5)
@@ -1022,7 +1022,7 @@ class BayesMCTSAgent(BasicAgent):
                 best_params = best_result['params']
                 best_score = best_result['target']
 
-                final_phi = (float(best_params['phi']) + base_phi) % 360
+                final_phi = (float(best_params['d_phi']) + base_phi) % 360
 
                 action = {
                     'V0': float(best_params['V0']),
