@@ -371,6 +371,8 @@ class MCTSAgent(Agent):
     成绩: 29.0/40.0, 0.725
           换用analyze_shot_for_reward后为 32.0/40.0, 0.800
           走位评分版本1 25.0/40.0, 0.625
+          完全不截断版本 22.0/40.0, 0.550
+          角度放宽到90/candidates放多到6个版本 20.0/40.0, 0.500
     """
     def __init__(self):
         super().__init__()
@@ -428,7 +430,7 @@ class MCTSAgent(Agent):
                 phi_ideal, cut_angle, dist = calculate_ghost_ball_params(cue_pos, obj_pos, pocket.center, R)
                 
                 # 只有非常难打的球才会被过滤 (阈值 85度)
-                if abs(cut_angle) > 85: continue
+                if abs(cut_angle) > 80: continue
                 
                 candidates.append({
                     'target_id': ball_id,
@@ -444,7 +446,7 @@ class MCTSAgent(Agent):
 
         # 排序：优先考虑切角小、距离近的球
         candidates.sort(key=lambda x: x['cut_angle'] + x['distance']*10)
-        top_candidates = candidates[:4] # 只看前4个最好的选择
+        top_candidates = candidates[:6] # 只看前4个最好的选择
 
         best_action = None
         best_score = -float('inf')
@@ -453,7 +455,7 @@ class MCTSAgent(Agent):
         # --- 2. 模拟与微调 (Simulation) ---
         logger.info("[MCTSAgent] 评估 %d 个进攻线路...", len(top_candidates))
         
-        for cand in top_candidates:
+        for cand in top_candidates: # 到只剩8时经常只有1个cand，这说明白球位置不好
             # 微调逻辑：不仅尝试理论角度，还要尝试左右偏差
             # 物理引擎中，球的碰撞会有偏差，必须通过微调来修正
             phi_offsets = [0, -0.5, 0.5, -1.0, 1.0] 
@@ -477,8 +479,8 @@ class MCTSAgent(Agent):
                         if score > best_score:
                             best_score = score
                             best_action = {'V0': V0, 'phi': phi_try, 'theta': 0, 'a': 0, 'b': 0}
-                            # 如果找到了必进球且走位不错的解，可以提前剪枝
-                            if score >= 80: 
+                            # 如果找到了必进球且走位不错的解，可以提前剪枝，也相当于倾向于速度更小的动作
+                            if score >= 60: 
                                 logger.info("[MCTSAgent] 找到绝佳线路！决策: V0=%.1f, phi=%.1f (ExpScore:%.1f)",
                                                 best_action['V0'],
                                                 best_action['phi'],

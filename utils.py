@@ -226,26 +226,33 @@ def evaluate_state(shot: pt.System, last_state: dict, player_targets: list):
             # === 进攻模式 ===
             # 计算剩下的球里，哪一个最好打（Max Opportunity）
             best_opportunity = 0.0
+
+            if remaining_targets:
+                for tid in remaining_targets:
+                    target_ball_pos = shot.balls[tid].state.rvw[0]
+                    
+                    # 遍历所有袋口，找这个球的最佳进球路线
+                    for pid, pocket in shot.table.pockets.items():
+                        quality = _calculate_shot_quality(final_cue_pos, target_ball_pos, pocket.center)
+                        if quality > best_opportunity:
+                            best_opportunity = quality
             
-            for tid in remaining_targets:
-                target_ball_pos = shot.balls[tid].state.rvw[0]
-                
-                # 遍历所有袋口，找这个球的最佳进球路线
-                for pid, pocket in shot.table.pockets.items():
-                    quality = _calculate_shot_quality(final_cue_pos, target_ball_pos, pocket.center)
-                    if quality > best_opportunity:
-                        best_opportunity = quality
-            
-            # 将走位质量加入总分
-            # 权重建议：走位好坏大约值 20-30 分，相当于半个进球
-            # 这样 Agent 会在能进球的前提下，优先选择 V0 能带来高 quality 的那一杆
-            score += best_opportunity * 30.0
-            
-            # 额外奖励：母球是否停在中心区域 (避免贴库)
-            # 0.5 是中心，1.0 是边缘
-            dist_from_center = np.linalg.norm([final_cue_pos[0], final_cue_pos[1]])
-            if dist_from_center > 0.8: # 靠近库边
-                score -= 5.0
+                    
+                    if tid != '8':
+                        # 将走位质量加入总分
+                        # 权重建议：走位好坏大约值 20-30 分，相当于半个进球
+                        # 这样 Agent 会在能进球的前提下，优先选择 V0 能带来高 quality 的那一杆
+                        score += best_opportunity * 30.0
+                    else:
+                        # 8号球走位权重极高！
+                        # 如果能舒服地打8号，给予巨额奖励，这会迫使上一杆拼命走到这个位置
+                        score += best_opportunity * 80.0
+                    
+                    # 额外奖励：母球是否停在中心区域 (避免贴库)
+                    # 0.5 是中心，1.0 是边缘
+                    dist_from_center = np.linalg.norm([final_cue_pos[0], final_cue_pos[1]])
+                    if dist_from_center > 0.8: # 靠近库边
+                        score -= 5.0
             
         else:
             # === 防守模式 (可选) ===
