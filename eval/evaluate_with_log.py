@@ -8,29 +8,30 @@ evaluate_self.py - Agent 自我对抗评估脚本
 
 使用方式：
 1. 修改 agent_b 为你设计的待测试的 Agent， 与课程提供的BasicAgent对打
-2. 调整 n_games 设置对战局数（评分时设置为40局来计算胜率）
+2. 调整 n_games 设置对战局数（评分时设置为120局来计算胜率）
 3. 运行脚本查看结果
 """
 
-import math
-import pooltool as pt
-import numpy as np
-from pooltool.objects import PocketTableSpecs, Table, TableType
-import copy
+# 导入必要的模块
+from utils import set_random_seed
+from poolenv import PoolEnv
+from agent import BasicAgent, NewAgent
 import os
-from datetime import datetime
-import random
+import sys
 import logging
 from pathlib import Path
 
-import sys
+# 设置随机种子，enable=True 时使用固定种子，enable=False 时使用完全随机
+# 根据需求，我们在这里统一设置随机种子，确保 agent 双方的全局击球扰动使用相同的随机状态
+set_random_seed(enable=False, seed=42)
+
+env = PoolEnv()
+results = {'AGENT_A_WIN': 0, 'AGENT_B_WIN': 0, 'SAME': 0}
+n_games = 120  # 对战局数 自己测试时可以修改 扩充为120局为了减少随机带来的扰动
+
 
 parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(parent_dir)
-
-from poolenv import PoolEnv
-from agent_with_log import Agent, BasicAgent, NewAgent
-
 
 def _safe_agent_method(agent):
     """Return agent.method() string if available, otherwise class name."""
