@@ -242,14 +242,14 @@ def evaluate_state(shot: pt.System, last_state: dict, player_targets: list):
                         # 将走位质量加入总分
                         # 权重建议：走位好坏大约值 20-30 分，相当于半个进球
                         # 这样 Agent 会在能进球的前提下，优先选择 V0 能带来高 quality 的那一杆
-                        score += best_opportunity * 30.0
+                        score += best_opportunity * 10.0
                     else:
                         # 8号球走位权重极高！
-                        # 如果能舒服地打8号，给予巨额奖励，这会迫使上一杆拼命走到这个位置
-                        score += best_opportunity * 80.0
+                        # 如果能舒服地打8号，给予更高奖励，这会迫使上一杆拼命走到这个位置
+                        score += best_opportunity * 15.0
                     
             
-        else:
+        # else:
             # === 防守模式 (可选) ===
             # 如果没进球，我希望把母球停在让对手难受的位置
             # 这需要推断对手的目标球。简单起见，假设对手要打剩下的非我方球

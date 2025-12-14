@@ -457,7 +457,7 @@ class MCTSAgent(Agent):
             # 微调逻辑：不仅尝试理论角度，还要尝试左右偏差
             # 物理引擎中，球的碰撞会有偏差，必须通过微调来修正
             phi_offsets = [0, -0.5, 0.5, -1.0, 1.0] 
-            speeds = [2.0, 4.0, 6.5] # 慢、中、快
+            speeds = [0.8, 2.0, 4.0, 6.5] # 轻推、慢、中、快
             
             for V0 in speeds:
                 for offset in phi_offsets:
