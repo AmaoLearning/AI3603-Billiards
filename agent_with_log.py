@@ -960,7 +960,7 @@ class BayesMCTSAgent(BasicAgent):
 
             remaining_own = [bid for bid in my_targets if balls[bid].state.s != 4]
             if len(remaining_own) == 0:
-                my_targets = ["8"]
+                remaining_own = ["8"]
                 logger.info("[BayesMCTS] 我的目标球已全部清空，自动切换目标为：8号球")
             
             candidates = []
@@ -1006,7 +1006,7 @@ class BayesMCTSAgent(BasicAgent):
                     base_phi=base_phi,       # 绑定当前的几何角
                     balls=balls,             # 绑定当前球状态
                     table=table,
-                    my_targets=my_targets,
+                    my_targets=remaining_own,
                     last_state_snapshot=last_state_snapshot
                 )
                 
