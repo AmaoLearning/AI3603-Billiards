@@ -1036,7 +1036,7 @@ class BayesMCTSAgent(BasicAgent):
                     top_score = best_score
                     top_action = action
                     top_base = base_phi
-                    top_delta = float(best_params['phi'])
+                    top_delta = float(best_params['d_phi'])
 
             if top_score < 10:
                 logger.info("[BayesMCTS] 未找到好的方案 (最高分: %.2f)。使用随机动作。", top_score)
