@@ -1019,7 +1019,7 @@ class BayesMCTSAgent(BasicAgent):
                 best_params = best_result['params']
                 best_score = best_result['target']
 
-                final_phi = (float(best_params['phi']) + phi_ideal) % 360
+                final_phi = (float(best_params['phi']) + cand['phi_center']) % 360
 
                 action = {
                     'V0': float(best_params['V0']),
@@ -1034,7 +1034,7 @@ class BayesMCTSAgent(BasicAgent):
                     top_action = action
 
             if top_score < 10:
-                logger.info("[BayesMCTS] 未找到好的方案 (最高分: %.2f)。使用随机动作。", best_score)
+                logger.info("[BayesMCTS] 未找到好的方案 (最高分: %.2f)。使用随机动作。", top_score)
                 return self._random_action()
             
             logger.info(
