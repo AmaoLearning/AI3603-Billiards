@@ -378,7 +378,7 @@ class MCTSAgent(Agent):
         super().__init__()
         logger.info("ImprovedMCTSAgent 已初始化 - 包含防守逻辑与微调瞄准")
 
-    def _generate_safety_shot(self, balls, my_targets):
+    def _generate_safety_shot(self, balls, candidates):
         """
         防守策略：当没有好机会时，轻轻碰一下离得最近的球，避免犯规
         """
@@ -388,9 +388,6 @@ class MCTSAgent(Agent):
         best_target = None
         
         # 找最近的自己的球
-        candidates = [b for b in my_targets if balls[b].state.s != 4]
-        if not candidates: candidates = ['8']
-        
         for bid in candidates:
             obj_pos = balls[bid].state.rvw[0]
             dist = np.linalg.norm(np.array(obj_pos[:2]) - np.array(cue_pos[:2]))
@@ -404,6 +401,7 @@ class MCTSAgent(Agent):
             dy = obj_pos[1] - cue_pos[1]
             phi = np.degrees(np.arctan2(dy, dx)) % 360
             # 极轻的力度，只要碰到就行
+            logger.info(f'[MCTSAgent] 轻轻触碰己方球 {best_target}')
             return {'V0': 0.8, 'phi': phi, 'theta': 0, 'a': 0, 'b': 0}
         
         return self._random_action()
@@ -430,7 +428,7 @@ class MCTSAgent(Agent):
                 phi_ideal, cut_angle, dist = calculate_ghost_ball_params(cue_pos, obj_pos, pocket.center, R)
                 
                 # 只有非常难打的球才会被过滤 (阈值 85度)
-                if abs(cut_angle) > 80: continue
+                if abs(cut_angle) > 85: continue
                 
                 candidates.append({
                     'target_id': ball_id,
@@ -442,11 +440,11 @@ class MCTSAgent(Agent):
         # 如果真的没有进攻机会，执行防守
         if not candidates:
             logger.info("[MCTSAgent] 无几何进攻线路，尝试防守。")
-            return self._generate_safety_shot(balls, my_targets)
+            return self._generate_safety_shot(balls, remaining_own)
 
         # 排序：优先考虑切角小、距离近的球
         candidates.sort(key=lambda x: x['cut_angle'] + x['distance']*10)
-        top_candidates = candidates[:6] # 只看前4个最好的选择
+        top_candidates = candidates[:4] # 只看前4个最好的选择
 
         best_action = None
         best_score = -float('inf')
@@ -492,9 +490,9 @@ class MCTSAgent(Agent):
                         logger.error("[MCTSAgent ERROR] Sim failed: %s", e)
                         continue
 
-        if best_action is None:
+        if (best_action is None) or (best_score < 0): # 更激进地采取防守策略
             logger.info("[MCTSAgent] 模拟后未发现可行进攻方案，转为防守。")
-            return self._generate_safety_shot(balls, my_targets)
+            return self._generate_safety_shot(balls, remaining_own)
             
         logger.info(
             "[MCTSAgent] 决策: V0=%.1f, phi=%.1f (ExpScore:%.1f)",

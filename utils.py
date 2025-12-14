@@ -248,11 +248,6 @@ def evaluate_state(shot: pt.System, last_state: dict, player_targets: list):
                         # 如果能舒服地打8号，给予巨额奖励，这会迫使上一杆拼命走到这个位置
                         score += best_opportunity * 80.0
                     
-                    # 额外奖励：母球是否停在中心区域 (避免贴库)
-                    # 0.5 是中心，1.0 是边缘
-                    dist_from_center = np.linalg.norm([final_cue_pos[0], final_cue_pos[1]])
-                    if dist_from_center > 0.8: # 靠近库边
-                        score -= 5.0
             
         else:
             # === 防守模式 (可选) ===
