@@ -18,6 +18,7 @@ from datetime import datetime
 import random
 import logging
 import signal
+import functools
 # from poolagent.pool import Pool as CuetipEnv, State as CuetipState
 # from poolagent import FunctionAgent
 
@@ -25,7 +26,7 @@ from bayes_opt import BayesianOptimization, SequentialDomainReductionTransformer
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import Matern
 import torch
-from utils import calculate_ghost_ball_params
+from utils import calculate_ghost_ball_params, evaluate_state, get_pockets
 from train.train_fast import AimNet 
 
 logger = logging.getLogger("evaluate")
@@ -941,6 +942,8 @@ class BayesMCTSAgent(BasicAgent):
         
         成绩：
             单打8号球: 31.0/40.0
+            analyze_shot_for_reward: 32.0/40.0
+            evaluate_state: 28.0/40.0
         """
         super().__init__()
         
