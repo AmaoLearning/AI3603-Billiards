@@ -222,14 +222,14 @@ def evaluate_state(shot: pt.System, last_state: dict, player_targets: list):
     is_foul = False
     
     if cue_pocketed and eight_pocketed:
-        score -= 150
+        return -1000
         is_foul = True
     elif cue_pocketed:
-        score -= 100
+        return -200
         is_foul = True
     elif eight_pocketed:
         is_targeting_eight_ball_legally = (len(player_targets) == 1 and player_targets[0] == "8")
-        return 100 if is_targeting_eight_ball_legally else -150
+        return 500 if is_targeting_eight_ball_legally else -1000
             
     if foul_first_hit:
         score -= 30
@@ -244,6 +244,18 @@ def evaluate_state(shot: pt.System, last_state: dict, player_targets: list):
     if score == 0 and not is_foul:
         score = 10
     
+    disturbed_8 = False
+    is_targeting_8 = (len(player_targets) == 1 and player_targets[0] == "8")
+
+    if not is_targeting_8:
+        for e in shot.events:
+            if hasattr(e, 'ids') and '8' in e.ids:
+                disturbed_8 = True
+                break
+    
+    if disturbed_8:
+        score -= 50.0
+
     if not is_foul and not cue_pocketed:
         
         final_cue_pos = shot.balls['cue'].state.rvw[0]

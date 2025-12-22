@@ -12,26 +12,27 @@ evaluate_self.py - Agent 自我对抗评估脚本
 3. 运行脚本查看结果
 """
 
-# 导入必要的模块
-from utils import set_random_seed
-from poolenv import PoolEnv
-from agent import BasicAgent, NewAgent
-import os
-import sys
 import logging
 from pathlib import Path
+import os
+import sys
+parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(parent_dir)
+
+# 导入必要的模块
+from poolenv import PoolEnv
+from utils import set_random_seed
+from agent_with_log import BasicAgent, NewAgent
 
 # 设置随机种子，enable=True 时使用固定种子，enable=False 时使用完全随机
 # 根据需求，我们在这里统一设置随机种子，确保 agent 双方的全局击球扰动使用相同的随机状态
-set_random_seed(enable=False, seed=42)
+set_random_seed(enable=True, seed=42)
 
 env = PoolEnv()
 results = {'AGENT_A_WIN': 0, 'AGENT_B_WIN': 0, 'SAME': 0}
 n_games = 120  # 对战局数 自己测试时可以修改 扩充为120局为了减少随机带来的扰动
 
 
-parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.append(parent_dir)
 
 def _safe_agent_method(agent):
     """Return agent.method() string if available, otherwise class name."""
@@ -60,10 +61,6 @@ def _build_logger(agent_a, agent_b):
     logger.addHandler(sh)
     logger.info("Logging to %s", log_path.as_posix())
     return logger
-
-env = PoolEnv()
-results = {'AGENT_A_WIN': 0, 'AGENT_B_WIN': 0, 'SAME': 0}
-n_games = 40
 
 agent_a, agent_b = BasicAgent(), NewAgent()
 logger = _build_logger(agent_a, agent_b)

@@ -991,7 +991,7 @@ class BayesMCTSAgent(BasicAgent):
             return -500.0
             
         # 3. 评分
-        score = analyze_shot_for_reward(
+        score = evaluate_state(
             shot=sim_shot,
             last_state=last_state_snapshot,
             player_targets=my_targets
