@@ -322,6 +322,8 @@ class BasicAgent(Agent):
         if len(remaining) == 0: my_targets = ["8"]
         last_state_snapshot = {bid: copy.deepcopy(ball) for bid, ball in balls.items()}
 
+        logger.info("[BasicAgent] 正在为 Player (targets: %s) 搜索最佳击球...", remaining)
+
         # 生成候选动作
         candidate_actions = self.generate_heuristic_actions(balls, my_targets, table)
         n_candidates = len(candidate_actions)
