@@ -1,17 +1,3 @@
-"""
-evaluate_self.py - Agent 自我对抗评估脚本
-
-功能：
-- 让两个相同的 Agent 进行多局对战
-- 统计胜负和得分
-- 支持切换先后手和球型分配
-
-使用方式：
-1. 修改 agent_b 为你设计的待测试的 Agent， 与课程提供的BasicAgent对打
-2. 调整 n_games 设置对战局数（评分时设置为120局来计算胜率）
-3. 运行脚本查看结果
-"""
-
 import logging
 from pathlib import Path
 import os
@@ -47,7 +33,7 @@ def _safe_agent_method(agent):
 def _build_logger(agent_a, agent_b):
     logs_dir = Path("./eval/logs")
     logs_dir.mkdir(parents=True, exist_ok=True)
-    filename = f"evaluate_{_safe_agent_method(agent_a)}_{_safe_agent_method(agent_b)}.log"
+    filename = f"evaluate_New{_safe_agent_method(agent_a)}_{_safe_agent_method(agent_b)}.log"
     log_path = logs_dir / filename
     logger = logging.getLogger("evaluate")
     logger.handlers.clear()
