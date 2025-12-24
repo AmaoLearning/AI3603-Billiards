@@ -908,7 +908,7 @@ class HybridLearningAgent(Agent):
         logger.info(f"[Hybrid] 进攻模拟全失败 (BestScore: {best_score})，转为防守。")
         return self._generate_safety_shot(balls, my_targets)
 
-class BayesMCTSAgent(BasicAgent):
+class BayesMCTSAgent(Agent):
     """基于贝叶斯优化的智能MCTS Agent"""
     
     def __init__(self, target_balls=None):
@@ -949,6 +949,39 @@ class BayesMCTSAgent(BasicAgent):
         self.enable_noise = False
         
         logger.info("[BayesMCTS] (Smart, pooltool-native) 已初始化。")
+    
+    def _create_optimizer(self, reward_function, seed):
+        """创建贝叶斯优化器
+        
+        参数：
+            reward_function: 目标函数，(V0, phi, theta, a, b) -> score
+            seed: 随机种子
+        
+        返回：
+            BayesianOptimization对象
+        """
+        gpr = GaussianProcessRegressor(
+            kernel=Matern(nu=2.5),
+            alpha=self.ALPHA,
+            n_restarts_optimizer=10,
+            random_state=seed
+        )
+        
+        bounds_transformer = SequentialDomainReductionTransformer(
+            gamma_osc=0.8,
+            gamma_pan=1.0
+        )
+        
+        optimizer = BayesianOptimization(
+            f=reward_function,
+            pbounds=self.pbounds,
+            random_state=seed,
+            verbose=0,
+            bounds_transformer=bounds_transformer
+        )
+        optimizer._gp = gpr
+        
+        return optimizer
     
     def _evaluate_action(self, V0, d_phi, theta, a, b, base_phi, balls, table, my_targets, last_state_snapshot):
         # 1. 还原绝对角度
