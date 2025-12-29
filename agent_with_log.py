@@ -27,7 +27,8 @@ from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import Matern
 import torch
 from utils import calculate_ghost_ball_params, evaluate_state, get_pockets
-from train.train_fast import AimNet 
+from train.train_fast import AimNet
+from .agents import Agent
 
 logger = logging.getLogger("evaluate")
 
@@ -170,39 +171,188 @@ def analyze_shot_for_reward(shot: pt.System, last_state: dict, player_targets: l
         
     return score
 
-class Agent():
-    """Agent 基类"""
-    def __init__(self):
-        pass
-    
-    def decision(self, *args, **kwargs):
-        """决策方法（子类需实现）
-        
-        返回：dict, 包含 'V0', 'phi', 'theta', 'a', 'b'
-        """
-        pass
-    
-    def _random_action(self,):
-        """生成随机击球动作
-        
-        返回：dict
-            V0: [0.5, 8.0] m/s
-            phi: [0, 360] 度
-            theta: [0, 90] 度
-            a, b: [-0.5, 0.5] 球半径比例
-        """
-        action = {
-            'V0': round(random.uniform(0.5, 8.0), 2),   # 初速度 0.5~8.0 m/s
-            'phi': round(random.uniform(0, 360), 2),    # 水平角度 (0°~360°)
-            'theta': round(random.uniform(0, 90), 2),   # 垂直角度
-            'a': round(random.uniform(-0.5, 0.5), 3),   # 杆头横向偏移（单位：球半径比例）
-            'b': round(random.uniform(-0.5, 0.5), 3)    # 杆头纵向偏移
-        }
-        return action
-
-
 
 class BasicAgent(Agent):
+    """基于贝叶斯优化的智能 Agent"""
+    
+    def __init__(self, target_balls=None):
+        """初始化 Agent
+        
+        参数：
+            target_balls: 保留参数，暂未使用
+        """
+        super().__init__()
+        
+        # 搜索空间
+        self.pbounds = {
+            'V0': (0.5, 8.0),
+            'phi': (0, 360),
+            'theta': (0, 90), 
+            'a': (-0.5, 0.5),
+            'b': (-0.5, 0.5)
+        }
+        
+        # 优化参数
+        self.INITIAL_SEARCH = 20
+        self.OPT_SEARCH = 10
+        self.ALPHA = 1e-2
+        
+        # 模拟噪声（可调整以改变训练难度）
+        self.noise_std = {
+            'V0': 0.1,
+            'phi': 0.1,
+            'theta': 0.1,
+            'a': 0.003,
+            'b': 0.003
+        }
+        self.enable_noise = False
+        
+        print("BasicAgent (贝叶斯优化版) 已初始化。")
+
+    
+    def _create_optimizer(self, reward_function, seed):
+        """创建贝叶斯优化器
+        
+        参数：
+            reward_function: 目标函数，(V0, phi, theta, a, b) -> score
+            seed: 随机种子
+        
+        返回：
+            BayesianOptimization对象
+        """
+        gpr = GaussianProcessRegressor(
+            kernel=Matern(nu=2.5),
+            alpha=self.ALPHA,
+            n_restarts_optimizer=10,
+            random_state=seed
+        )
+        
+        bounds_transformer = SequentialDomainReductionTransformer(
+            gamma_osc=0.8,
+            gamma_pan=1.0
+        )
+        
+        optimizer = BayesianOptimization(
+            f=reward_function,
+            pbounds=self.pbounds,
+            random_state=seed,
+            verbose=0,
+            bounds_transformer=bounds_transformer
+        )
+        optimizer._gp = gpr
+        
+        return optimizer
+
+
+    def decision(self, balls=None, my_targets=None, table=None):
+        """使用贝叶斯优化搜索最佳击球参数
+        
+        参数：
+            balls: 球状态字典，{ball_id: Ball}
+            my_targets: 目标球ID列表，['1', '2', ...]
+            table: 球桌对象
+        
+        返回：
+            dict: 击球动作 {'V0', 'phi', 'theta', 'a', 'b'}
+                失败时返回随机动作
+        """
+        if balls is None:
+            print(f"[BasicAgent] Agent decision函数未收到balls关键信息，使用随机动作。")
+            return self._random_action()
+        try:
+            
+            # 保存一个击球前的状态快照，用于对比
+            last_state_snapshot = {bid: copy.deepcopy(ball) for bid, ball in balls.items()}
+
+            remaining_own = [bid for bid in my_targets if balls[bid].state.s != 4]
+            if len(remaining_own) == 0:
+                my_targets = ["8"]
+                logger.info("[BasicAgent] 我的目标球已全部清空，自动切换目标为：8号球")
+
+            # 1.动态创建"奖励函数" (Wrapper)
+            # 贝叶斯优化器会调用此函数，并传入参数
+            def reward_fn_wrapper(V0, phi, theta, a, b):
+                # 创建一个用于模拟的沙盒系统
+                sim_balls = {bid: copy.deepcopy(ball) for bid, ball in balls.items()}
+                sim_table = copy.deepcopy(table)
+                cue = pt.Cue(cue_ball_id="cue")
+
+                shot = pt.System(table=sim_table, balls=sim_balls, cue=cue)
+                
+                try:
+                    if self.enable_noise:
+                        V0_noisy = V0 + np.random.normal(0, self.noise_std['V0'])
+                        phi_noisy = phi + np.random.normal(0, self.noise_std['phi'])
+                        theta_noisy = theta + np.random.normal(0, self.noise_std['theta'])
+                        a_noisy = a + np.random.normal(0, self.noise_std['a'])
+                        b_noisy = b + np.random.normal(0, self.noise_std['b'])
+                        
+                        V0_noisy = np.clip(V0_noisy, 0.5, 8.0)
+                        phi_noisy = phi_noisy % 360
+                        theta_noisy = np.clip(theta_noisy, 0, 90)
+                        a_noisy = np.clip(a_noisy, -0.5, 0.5)
+                        b_noisy = np.clip(b_noisy, -0.5, 0.5)
+                        
+                        shot.cue.set_state(V0=V0_noisy, phi=phi_noisy, theta=theta_noisy, a=a_noisy, b=b_noisy)
+                    else:
+                        shot.cue.set_state(V0=V0, phi=phi, theta=theta, a=a, b=b)
+                    
+                    # 关键：使用带超时保护的物理模拟（3秒上限）
+                    if not simulate_with_timeout(shot, timeout=3):
+                        return 0  # 超时是物理引擎问题，不惩罚agent
+                except Exception as e:
+                    # 模拟失败，给予极大惩罚
+                    return -500
+                
+                # 使用我们的"裁判"来打分
+                score = analyze_shot_for_reward(
+                    shot=shot,
+                    last_state=last_state_snapshot,
+                    player_targets=my_targets
+                )
+
+
+                return score
+
+            logger.info(f"[BasicAgent] 正在为 Player (targets: {my_targets}) 搜索最佳击球...")
+            
+            seed = np.random.randint(1e6)
+            optimizer = self._create_optimizer(reward_fn_wrapper, seed)
+            optimizer.maximize(
+                init_points=self.INITIAL_SEARCH,
+                n_iter=self.OPT_SEARCH
+            )
+            
+            best_result = optimizer.max
+            best_params = best_result['params']
+            best_score = best_result['target']
+
+            if best_score < 10:
+                logger.info(f"[BasicAgent] 未找到好的方案 (最高分: {best_score:.2f})。使用随机动作。")
+                return self._random_action()
+            action = {
+                'V0': float(best_params['V0']),
+                'phi': float(best_params['phi']),
+                'theta': float(best_params['theta']),
+                'a': float(best_params['a']),
+                'b': float(best_params['b']),
+            }
+
+            logger.info(f"[BasicAgent] 决策 (得分: {best_score:.2f}): "
+                  f"V0={action['V0']:.2f}, phi={action['phi']:.2f}, "
+                  f"θ={action['theta']:.2f}, a={action['a']:.3f}, b={action['b']:.3f}")
+            return action
+
+        except Exception as e:
+            logger.info(f"[BasicAgent] 决策时发生严重错误，使用随机动作。原因: {e}")
+            import traceback
+            traceback.print_exc()
+            return self._random_action()
+
+# ============ BasicAgentPro: 基于MCTS的进阶 Agent ============
+class BasicAgentPro(Agent):
+    """基于MCTS（蒙特卡洛树搜索）的进阶 Agent"""
+    
     def __init__(self,
                  n_simulations=50,       # 仿真次数
                  c_puct=1.414):          # 探索系数
@@ -215,6 +365,8 @@ class BasicAgent(Agent):
         self.sim_noise = {
             'V0': 0.1, 'phi': 0.15, 'theta': 0.1, 'a': 0.005, 'b': 0.005
         }
+        
+        logger.info("BasicAgentPro (MCTS版) 已初始化。")
 
     def _calc_angle_degrees(self, v):
         angle = math.degrees(math.atan2(v[1], v[0]))
@@ -247,6 +399,8 @@ class BasicAgent(Agent):
         # 如果没有目标球了（理论上外部会处理转为8号，这里兜底）
         if not target_ids:
             target_ids = ['8']
+        
+        logger.info("[BasicAgentPro] 正在为 Player (targets: %s) 搜索最佳击球...", target_ids)
 
         # 遍历每一个目标球
         for tid in target_ids:
@@ -293,7 +447,7 @@ class BasicAgent(Agent):
     def simulate_action(self, balls, table, action):
         """
         [修改点1] 执行带噪声的物理仿真
-        让 Agent 意识到由于误差的存在，某些“极限球”是不可打的
+        让 Agent 意识到由于误差的存在，某些"极限球"是不可打的
         """
         sim_balls = {bid: copy.deepcopy(ball) for bid, ball in balls.items()}
         sim_table = copy.deepcopy(table)
@@ -321,8 +475,6 @@ class BasicAgent(Agent):
         remaining = [bid for bid in my_targets if balls[bid].state.s != 4]
         if len(remaining) == 0: my_targets = ["8"]
         last_state_snapshot = {bid: copy.deepcopy(ball) for bid, ball in balls.items()}
-
-        logger.info("[BasicAgent] 正在为 Player (targets: %s) 搜索最佳击球...", remaining)
 
         # 生成候选动作
         candidate_actions = self.generate_heuristic_actions(balls, my_targets, table)
@@ -367,7 +519,7 @@ class BasicAgent(Agent):
         best_action = candidate_actions[best_idx]
         
         # 简单打印一下当前最好的预测胜率
-        logger.info(f"[BasicAgent] Best Avg Score: {avg_rewards[best_idx]:.3f} (Sims: {self.n_simulations})")
+        logger.info(f"[BasicAgentPro] Best Avg Score: {avg_rewards[best_idx]:.3f} (Sims: {self.n_simulations})")
         
         return best_action
 
@@ -378,7 +530,7 @@ class NewAgent(Agent):
         model_path = os.path.join('train', 'checkpoints', 'aim_model.pth')
         #self.agent = HybridLearningAgent(model_path)
         # self.agent = MCTSAgent()
-        self.agent = BayesMCTSAgent()
+        self.agent = BayesMCTSAgent(True)
     
     def decision(self, balls=None, my_targets=None, table=None):
         """决策方法
@@ -913,7 +1065,7 @@ class HybridLearningAgent(Agent):
 class BayesMCTSAgent(Agent):
     """基于贝叶斯优化的智能MCTS Agent"""
     
-    def __init__(self, target_balls=None):
+    def __init__(self, enable_noise=False):
         """初始化 Agent
         
         参数：
@@ -928,7 +1080,7 @@ class BayesMCTSAgent(Agent):
         
         # 搜索空间
         self.pbounds = {
-            'V0': (0.5, 8.0),
+            'V0': (-1.5, 1.5),
             'd_phi': (-3, 3),
             'theta': (0, 90), 
             'a': (-0.5, 0.5),
@@ -936,19 +1088,19 @@ class BayesMCTSAgent(Agent):
         }
         
         # 优化参数
-        self.INITIAL_SEARCH = 10
-        self.OPT_SEARCH = 5
+        self.INITIAL_SEARCH = 20
+        self.OPT_SEARCH = 10
         self.ALPHA = 1e-2
         
         # 模拟噪声（可调整以改变训练难度）
         self.noise_std = {
             'V0': 0.1,
-            'd_phi': 0.1,
+            'd_phi': 0.15,
             'theta': 0.1,
-            'a': 0.003,
-            'b': 0.003
+            'a': 0.005,
+            'b': 0.005
         }
-        self.enable_noise = False
+        self.enable_noise = enable_noise
         
         logger.info("[BayesMCTS] (Smart, pooltool-native) 已初始化。")
     
@@ -985,17 +1137,25 @@ class BayesMCTSAgent(Agent):
         
         return optimizer
     
-    def _evaluate_action(self, V0, d_phi, theta, a, b, base_phi, balls, table, my_targets, last_state_snapshot):
+    def _evaluate_action(self, d_V0, d_phi, theta, a, b, base_phi, base_v, balls, table, my_targets, last_state_snapshot):
         # 1. 还原绝对角度
-        actual_phi = base_phi + d_phi
+        phi = base_phi + d_phi
+        V0 = np.clip(base_v + d_V0, 0.8, 7.5)
         
         sim_balls = {bid: copy.deepcopy(ball) for bid, ball in balls.items()}
         sim_table = copy.deepcopy(table)
         cue = pt.Cue(cue_ball_id="cue")
         
         # 2. 设置状态
+        if self.enable_noise: 
+            V0 = np.clip(V0 + np.random.normal(0, self.noise_std['V0']), 0.5, 8.0)
+            phi = (phi + np.random.normal(0, self.noise_std['phi'])) % 360
+            theta = np.clip(theta + np.random.normal(0, self.noise_std['theta']), 0, 90)
+            a = np.clip(a + np.random.normal(0, self.noise_std['a']), -0.5, 0.5)
+            b = np.clip(b + np.random.normal(0, self.noise_std['b']), -0.5, 0.5)
+
         sim_shot = pt.System(table=sim_table, balls=sim_balls, cue=cue)
-        sim_shot.cue.set_state(V0=V0, phi=actual_phi, theta=theta, a=a, b=b)
+        sim_shot.cue.set_state(V0=V0, phi=phi, theta=theta, a=a, b=b)
         
         try:
             pt.simulate(sim_shot, inplace=True)
@@ -1056,7 +1216,7 @@ class BayesMCTSAgent(Agent):
                         'distance': dist
                     })
             
-            candidates.sort(key=lambda x: x['cut_angle'])
+            candidates.sort(key=lambda x: x['cut_angle'] + 10 * x['dist']) # 考虑距离
             top_candidates = candidates[:2]
 
             top_action = None
@@ -1070,12 +1230,15 @@ class BayesMCTSAgent(Agent):
 
                 # 几何先验角度
                 base_phi = cand['phi_center']
+                # 粗略估计速度
+                base_v = 1.5 + cand['dist'] * 1.5
                 
                 # 使用 partial 绑定参数，确保变量隔离！
                 # 这样优化器调用的函数就只剩 (V0, d_phi, theta, a, b) 这5个参数了
                 target_func = functools.partial(
                     self._evaluate_action,
                     base_phi=base_phi,       # 绑定当前的几何角
+                    base_v=base_v,           # 绑定当前的估计速度
                     balls=balls,             # 绑定当前球状态
                     table=table,
                     my_targets=remaining_own,
