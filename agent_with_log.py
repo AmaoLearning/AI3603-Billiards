@@ -28,7 +28,7 @@ from sklearn.gaussian_process.kernels import Matern
 import torch
 from utils import calculate_ghost_ball_params, evaluate_state, get_pockets
 from train.train_fast import AimNet
-from .agents import Agent
+from agents import Agent
 
 logger = logging.getLogger("evaluate")
 
@@ -1075,12 +1075,13 @@ class BayesMCTSAgent(Agent):
             单打8号球: 31.0/40.0
             analyze_shot_for_reward: 32.0/40.0
             evaluate_state: 28.0/40.0
+            v1 vs BasicPro: 43.0/120.0
         """
         super().__init__()
         
         # 搜索空间
         self.pbounds = {
-            'V0': (-1.5, 1.5),
+            'd_V0': (-1.5, 1.5),
             'd_phi': (-3, 3),
             'theta': (0, 90), 
             'a': (-0.5, 0.5),
@@ -1094,7 +1095,7 @@ class BayesMCTSAgent(Agent):
         
         # 模拟噪声（可调整以改变训练难度）
         self.noise_std = {
-            'V0': 0.1,
+            'd_V0': 0.1,
             'd_phi': 0.15,
             'theta': 0.1,
             'a': 0.005,
@@ -1148,8 +1149,8 @@ class BayesMCTSAgent(Agent):
         
         # 2. 设置状态
         if self.enable_noise: 
-            V0 = np.clip(V0 + np.random.normal(0, self.noise_std['V0']), 0.5, 8.0)
-            phi = (phi + np.random.normal(0, self.noise_std['phi'])) % 360
+            V0 = np.clip(V0 + np.random.normal(0, self.noise_std['d_V0']), 0.5, 8.0)
+            phi = (phi + np.random.normal(0, self.noise_std['d_phi'])) % 360
             theta = np.clip(theta + np.random.normal(0, self.noise_std['theta']), 0, 90)
             a = np.clip(a + np.random.normal(0, self.noise_std['a']), -0.5, 0.5)
             b = np.clip(b + np.random.normal(0, self.noise_std['b']), -0.5, 0.5)
@@ -1216,13 +1217,13 @@ class BayesMCTSAgent(Agent):
                         'distance': dist
                     })
             
-            candidates.sort(key=lambda x: x['cut_angle'] + 10 * x['dist']) # 考虑距离
+            candidates.sort(key=lambda x: x['cut_angle'] + 10 * x['distance']) # 考虑距离
             top_candidates = candidates[:2]
 
             top_action = None
             top_score = -float('inf')
-            top_base = 0
-            top_delta = 0
+            top_base_phi = 0
+            top_base_v = 0
 
             for cand in top_candidates:
                 # 1.动态创建“奖励函数” (Wrapper)
@@ -1231,7 +1232,7 @@ class BayesMCTSAgent(Agent):
                 # 几何先验角度
                 base_phi = cand['phi_center']
                 # 粗略估计速度
-                base_v = 1.5 + cand['dist'] * 1.5
+                base_v = 1.5 + cand['distance'] * 1.5
                 
                 # 使用 partial 绑定参数，确保变量隔离！
                 # 这样优化器调用的函数就只剩 (V0, d_phi, theta, a, b) 这5个参数了
@@ -1258,9 +1259,10 @@ class BayesMCTSAgent(Agent):
                 best_score = best_result['target']
 
                 final_phi = (float(best_params['d_phi']) + base_phi) % 360
+                final_v = np.clip((float(best_params['d_V0']) + base_v), 0.8, 7.5)
 
                 action = {
-                    'V0': float(best_params['V0']),
+                    'V0': final_v,
                     'phi': final_phi,
                     'theta': float(best_params['theta']),
                     'a': float(best_params['a']),
@@ -1270,19 +1272,20 @@ class BayesMCTSAgent(Agent):
                 if best_score > top_score:
                     top_score = best_score
                     top_action = action
-                    top_base = base_phi
-                    top_delta = float(best_params['d_phi'])
+                    top_base_phi = base_phi
+                    top_base_v = base_v
 
             if top_score < 10:
                 logger.info("[BayesMCTS] 未找到好的方案 (最高分: %.2f)。使用随机动作。", top_score)
                 return self._random_action()
             
             logger.info(
-                "[BayesMCTS] 决策 (得分: %.2f): V0=%.2f, phi_base=%.2f, phi_delta=%.2f θ=%.2f, a=%.3f, b=%.3f",
+                "[BayesMCTS] 决策 (得分: %.2f): V0=%.2f, V0_base=%.2f, phi=%.2f, phi_base=%.2f θ=%.2f, a=%.3f, b=%.3f",
                 top_score,
                 top_action['V0'],
-                top_base,
-                top_delta,
+                top_base_v,
+                top_action['phi'],
+                top_base_phi,
                 top_action['theta'],
                 top_action['a'],
                 top_action['b'],
