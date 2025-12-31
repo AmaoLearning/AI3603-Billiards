@@ -1085,15 +1085,16 @@ class BayesMCTSAgent(Agent):
         self.pbounds = {
             'd_V0': (-2.0, 2.0),
             'd_phi': (-3.0, 3.0),  # 从 ±0.5 扩大到 ±3.0，关键改进！
-            'theta': (0, 45),      # 限制跳球角度，减少无效搜索
-            'a': (-0.3, 0.3),      # 缩小塞球范围，减少复杂度
-            'b': (-0.3, 0.3)
+            'theta': (0, 30),      # 限制跳球角度，减少无效搜索
+            'a': (-0.2, 0.2),      # 缩小塞球范围，减少复杂度
+            'b': (-0.2, 0.2)
         }
         
         # 优化参数 - 增加初始探索
-        self.INITIAL_SEARCH = 15
-        self.OPT_SEARCH = 8
+        self.INITIAL_SEARCH = 10
+        self.OPT_SEARCH = 5
         self.NOISE_SAMPLES = 3  # 多次采样取平均
+        self.EARLY_STOP_SCORE = 50
         self.ALPHA = 1e-2
         
         # 模拟噪声（与 BasicAgentPro 保持一致）
@@ -1212,10 +1213,33 @@ class BayesMCTSAgent(Agent):
                 remaining_own = ["8"]
                 logger.info("[BayesMCTS] 我的目标球已全部清空，自动切换目标为：8号球")
             
-            candidates = []
             cue_ball = balls['cue']
             cue_pos = cue_ball.state.rvw[0]
             R = cue_ball.params.R
+            
+            # ========== 开球特殊处理 ==========
+            # 判断是否为开球局面：所有目标球都在台上（7个）
+            is_break_shot = balls['1'].state.t == 0
+            
+            if is_break_shot:
+                # 开球策略：直接大力冲击球堆，不做复杂搜索
+                # 标准开球角度：瞄准1号球（球堆顶端）
+                one_pos = balls['1'].state.rvw[0]
+                dx = one_pos[0] - cue_pos[0]
+                dy = one_pos[1] - cue_pos[1]
+                phi_break = np.degrees(np.arctan2(dy, dx)) % 360
+                
+                logger.info("[BayesMCTS] 检测到开球局面，使用快速开球策略 (phi=%.1f)", phi_break)
+                return {
+                    'V0': 7.0,  # 大力开球
+                    'phi': phi_break,
+                    'theta': 0,
+                    'a': 0,
+                    'b': 0
+                }
+            # ====================================
+            
+            candidates = []
 
             logger.info("[BayesMCTS] 正在为 Player (targets: %s) 搜索最佳击球...", remaining_own)
             for ball_id in remaining_own:
@@ -1237,15 +1261,22 @@ class BayesMCTSAgent(Agent):
             # 原公式 cut_angle + 10*dist 对远台惩罚过重
             candidates.sort(key=lambda x: x['cut_angle'] * 1.5 + x['distance'] * 5)
             
-            # 增加候选数量到 6 个，覆盖更多机会
-            top_candidates = candidates[:6]
+            # 只取前 3 个候选，平衡速度与质量
+            top_candidates = candidates[:3]
 
             top_action = None
             top_score = -float('inf')
             top_base_phi = 0
             top_base_v = 0
+            
+            # 早停标志
+            found_good_shot = False
 
             for cand in top_candidates:
+                # 早停：已找到进球方案，不再继续搜索
+                if found_good_shot:
+                    break
+                    
                 # 1.动态创建“奖励函数” (Wrapper)
                 # 贝叶斯优化器会调用此函数，并传入参数
 
@@ -1294,8 +1325,13 @@ class BayesMCTSAgent(Agent):
                     top_action = action
                     top_base_phi = base_phi
                     top_base_v = base_v
+                    
+                    # 早停：找到进球方案后不再搜索其他候选
+                    if best_score >= self.EARLY_STOP_SCORE:
+                        logger.info("[BayesMCTS] 早停：找到进球方案 (score=%.1f)", best_score)
+                        found_good_shot = True
 
-            if top_score < 10:
+            if top_score < 0:  # 减少误打黑8
                 logger.info("[BayesMCTS] 未找到好的方案 (最高分: %.2f)。使用随机动作。", top_score)
                 return self._random_action()
             
