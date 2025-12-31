@@ -1081,31 +1081,32 @@ class BayesMCTSAgent(Agent):
         """
         super().__init__()
         
-        # 搜索空间
+        # 搜索空间 - 扩大角度搜索范围以适应切球
         self.pbounds = {
-            'd_V0': (-1.5, 1.5),
-            'd_phi': (-0.5, 0.5),
-            'theta': (0, 90), 
-            'a': (-0.5, 0.5),
-            'b': (-0.5, 0.5)
+            'd_V0': (-2.0, 2.0),
+            'd_phi': (-3.0, 3.0),  # 从 ±0.5 扩大到 ±3.0，关键改进！
+            'theta': (0, 45),      # 限制跳球角度，减少无效搜索
+            'a': (-0.3, 0.3),      # 缩小塞球范围，减少复杂度
+            'b': (-0.3, 0.3)
         }
         
-        # 优化参数
-        self.INITIAL_SEARCH = 20
-        self.OPT_SEARCH = 10
+        # 优化参数 - 增加初始探索
+        self.INITIAL_SEARCH = 15
+        self.OPT_SEARCH = 8
+        self.NOISE_SAMPLES = 3  # 多次采样取平均
         self.ALPHA = 1e-2
         
-        # 模拟噪声（可调整以改变训练难度）
+        # 模拟噪声（与 BasicAgentPro 保持一致）
         self.noise_std = {
-            'd_V0': 0.1,
-            'd_phi': 0.15,
+            'V0': 0.1,
+            'phi': 0.15,
             'theta': 0.1,
             'a': 0.005,
             'b': 0.005
         }
         self.enable_noise = enable_noise
         
-        logger.info("[BayesMCTS] (Smart, pooltool-native) 已初始化。")
+        logger.info("[BayesMCTS] (Enhanced v2) 已初始化。")
     
     def _create_optimizer(self, reward_function, seed):
         """创建贝叶斯优化器
@@ -1141,37 +1142,50 @@ class BayesMCTSAgent(Agent):
         return optimizer
     
     def _evaluate_action(self, d_V0, d_phi, theta, a, b, base_phi, base_v, balls, table, my_targets, last_state_snapshot):
-        # 1. 还原绝对角度
-        phi = base_phi + d_phi
-        V0 = np.clip(base_v + d_V0, 0.8, 7.5)
+        """
+        带多次噪声采样的动作评估 (核心改进)
         
-        sim_balls = {bid: copy.deepcopy(ball) for bid, ball in balls.items()}
-        sim_table = copy.deepcopy(table)
-        cue = pt.Cue(cue_ball_id="cue")
+        改进点：
+        1. 多次采样取平均，提高稳健性（与MCTS思想对齐）
+        2. 使用 analyze_shot_for_reward（与 BasicAgentPro 对齐）
+        """
+        # 1. 还原绝对参数
+        phi_base = (base_phi + d_phi) % 360
+        V0_base = np.clip(base_v + d_V0, 0.8, 7.5)
         
-        # 2. 设置状态
-        if self.enable_noise: 
-            V0 = np.clip(V0 + np.random.normal(0, self.noise_std['d_V0']), 0.5, 8.0)
-            phi = (phi + np.random.normal(0, self.noise_std['d_phi'])) % 360
-            theta = np.clip(theta + np.random.normal(0, self.noise_std['theta']), 0, 90)
-            a = np.clip(a + np.random.normal(0, self.noise_std['a']), -0.5, 0.5)
-            b = np.clip(b + np.random.normal(0, self.noise_std['b']), -0.5, 0.5)
-
-        sim_shot = pt.System(table=sim_table, balls=sim_balls, cue=cue)
-        sim_shot.cue.set_state(V0=V0, phi=phi, theta=theta, a=a, b=b)
+        # 2. 多次噪声采样
+        n_samples = self.NOISE_SAMPLES if self.enable_noise else 1
+        scores = []
         
-        try:
-            pt.simulate(sim_shot, inplace=True)
-        except:
-            return -500.0
+        for _ in range(n_samples):
+            # 注入噪声（如果启用）
+            if self.enable_noise:
+                V0 = np.clip(V0_base + np.random.normal(0, self.noise_std['V0']), 0.5, 8.0)
+                phi = (phi_base + np.random.normal(0, self.noise_std['phi'])) % 360
+                theta_n = np.clip(theta + np.random.normal(0, self.noise_std['theta']), 0, 90)
+                a_n = np.clip(a + np.random.normal(0, self.noise_std['a']), -0.5, 0.5)
+                b_n = np.clip(b + np.random.normal(0, self.noise_std['b']), -0.5, 0.5)
+            else:
+                V0, phi, theta_n, a_n, b_n = V0_base, phi_base, theta, a, b
             
-        # 3. 评分
-        score = evaluate_state(
-            shot=sim_shot,
-            last_state=last_state_snapshot,
-            player_targets=my_targets
-        )
-        return score
+            # 构建模拟环境
+            sim_balls = {bid: copy.deepcopy(ball) for bid, ball in balls.items()}
+            sim_table = copy.deepcopy(table)
+            cue = pt.Cue(cue_ball_id="cue")
+            sim_shot = pt.System(table=sim_table, balls=sim_balls, cue=cue)
+            sim_shot.cue.set_state(V0=V0, phi=phi, theta=theta_n, a=a_n, b=b_n)
+            
+            try:
+                pt.simulate(sim_shot, inplace=True)
+                # 使用与 BasicAgentPro 相同的评估函数！
+                score = analyze_shot_for_reward(sim_shot, last_state_snapshot, my_targets)
+            except:
+                score = -500.0
+            
+            scores.append(score)
+        
+        # 返回平均分（更稳健）
+        return np.mean(scores)
 
     def decision(self, balls=None, my_targets=None, table=None):
         """使用贝叶斯优化搜索最佳击球参数
@@ -1209,8 +1223,8 @@ class BayesMCTSAgent(Agent):
                 for pid, pocket in table.pockets.items():
                     phi_ideal, cut_angle, dist = calculate_ghost_ball_params(cue_pos, obj_pos, pocket.center, R)
                     
-                    # 只有非常难打的球才会被过滤 (阈值 85度)
-                    if abs(cut_angle) > 85: continue
+                    # 放宽阈值到 80 度（与其他 Agent 一致）
+                    if abs(cut_angle) > 80: continue
                     
                     candidates.append({
                         'target_id': ball_id,
@@ -1219,8 +1233,12 @@ class BayesMCTSAgent(Agent):
                         'distance': dist
                     })
             
-            candidates.sort(key=lambda x: x['cut_angle'] + 10 * x['distance']) # 考虑距离
-            top_candidates = candidates[:4]
+            # 改进排序：降低距离权重，优先考虑切角
+            # 原公式 cut_angle + 10*dist 对远台惩罚过重
+            candidates.sort(key=lambda x: x['cut_angle'] * 1.5 + x['distance'] * 5)
+            
+            # 增加候选数量到 6 个，覆盖更多机会
+            top_candidates = candidates[:6]
 
             top_action = None
             top_score = -float('inf')
