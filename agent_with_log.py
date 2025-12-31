@@ -1076,13 +1076,15 @@ class BayesMCTSAgent(Agent):
             analyze_shot_for_reward: 32.0/40.0
             evaluate_state: 28.0/40.0
             v1 vs BasicPro: 43.0/120.0
+            v2 vs Basic: 100.0/120.0
+            v2 with Noise vs Basic: 106.0/120.0
         """
         super().__init__()
         
         # 搜索空间
         self.pbounds = {
             'd_V0': (-1.5, 1.5),
-            'd_phi': (-3, 3),
+            'd_phi': (-0.5, 0.5),
             'theta': (0, 90), 
             'a': (-0.5, 0.5),
             'b': (-0.5, 0.5)
@@ -1218,7 +1220,7 @@ class BayesMCTSAgent(Agent):
                     })
             
             candidates.sort(key=lambda x: x['cut_angle'] + 10 * x['distance']) # 考虑距离
-            top_candidates = candidates[:2]
+            top_candidates = candidates[:4]
 
             top_action = None
             top_score = -float('inf')
