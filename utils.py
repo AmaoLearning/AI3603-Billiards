@@ -153,18 +153,23 @@ def _calculate_shot_quality(cue_pos, target_pos, pocket_pos):
 
 def evaluate_state(shot: pt.System, last_state: dict, player_targets: list):
     """
-    分析击球结果并计算奖励分数
+    综合评估击球结果（结合规则判定 + 走位质量）
+    
+    设计原则：
+    1. 基础评分与 analyze_shot_for_reward 完全对齐（确保规则正确性）
+    2. 额外加入走位奖励，但权重不能压过进球（走位是锦上添花）
+    3. 简化逻辑，移除有争议的惩罚项（如 disturbed_8）
     
     参数：
         shot: 已完成物理模拟的 System 对象
         last_state: 击球前的球状态，{ball_id: Ball}
-        player_targets: 当前玩家目标球ID，['1', '2', ...]
+        player_targets: 当前玩家目标球ID，['1', '2', ...] 或 ['8']
     
     返回：
-        float: 奖励分数
-            +50/球（己方进球）, +100（合法黑8）, +10（合法无进球）
-            -100（白球进袋）, -150（非法黑8）, -30（首球/碰库犯规）
+        float: 综合奖励分数
     """
+    
+    # ========== 第一部分：规则评分（与 analyze_shot_for_reward 对齐）==========
     
     # 1. 基本分析
     new_pocketed = [bid for bid, b in shot.balls.items() if b.state.s == 4 and last_state[bid].state.s != 4]
@@ -178,26 +183,23 @@ def evaluate_state(shot: pt.System, last_state: dict, player_targets: list):
     # 2. 分析首球碰撞
     first_contact_ball_id = None
     foul_first_hit = False
+    valid_ball_ids = {'1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '14', '15'}
     
     for e in shot.events:
         et = str(e.event_type).lower()
         ids = list(e.ids) if hasattr(e, 'ids') else []
         if ('cushion' not in et) and ('pocket' not in et) and ('cue' in ids):
-            other_ids = [i for i in ids if i != 'cue']
+            other_ids = [i for i in ids if i != 'cue' and i in valid_ball_ids]
             if other_ids:
                 first_contact_ball_id = other_ids[0]
                 break
     
+    # 首球犯规判定
     if first_contact_ball_id is None:
-        if len(last_state) > 2:  # 只有白球和8号球时不算犯规
-             foul_first_hit = True
+        if len(last_state) > 2 or player_targets != ['8']:
+            foul_first_hit = True
     else:
-        remaining_own_before = [bid for bid in player_targets if last_state[bid].state.s != 4]
-        opponent_plus_eight = [bid for bid in last_state.keys() if bid not in player_targets and bid not in ['cue']]
-        if ('8' not in opponent_plus_eight):
-            opponent_plus_eight.append('8')
-            
-        if len(remaining_own_before) > 0 and first_contact_ball_id in opponent_plus_eight:
+        if first_contact_ball_id not in player_targets:
             foul_first_hit = True
     
     # 3. 分析碰库
@@ -214,108 +216,65 @@ def evaluate_state(shot: pt.System, last_state: dict, player_targets: list):
             if first_contact_ball_id is not None and first_contact_ball_id in ids:
                 target_hit_cushion = True
 
-    if len(new_pocketed) == 0 and first_contact_ball_id is not None and (not cue_hit_cushion) and (not target_hit_cushion):
-        foul_no_rail = True
-        
-    # 计算奖励分数
-    score = 0
+    if len(new_pocketed) == 0 and first_contact_ball_id is not None:
+        if not cue_hit_cushion and not target_hit_cushion:
+            foul_no_rail = True
+    
+    # 4. 计算基础分数（与 analyze_shot_for_reward 完全一致）
+    score = 0.0
     is_foul = False
     
     if cue_pocketed and eight_pocketed:
-        return -1000
-        is_foul = True
+        return -500.0  # 直接返回，最严重犯规
     elif cue_pocketed:
-        return -200
-        is_foul = True
+        return -100.0  # 白球落袋
     elif eight_pocketed:
-        is_targeting_eight_ball_legally = (len(player_targets) == 1 and player_targets[0] == "8")
-        return 500 if is_targeting_eight_ball_legally else -1000
+        is_legal_8 = (len(player_targets) == 1 and player_targets[0] == "8")
+        return 150.0 if is_legal_8 else -500.0
             
     if foul_first_hit:
-        score -= 30
+        score -= 30.0
         is_foul = True
     if foul_no_rail:
-        score -= 30
+        score -= 30.0
         is_foul = True
         
-    score += len(own_pocketed) * 50
-    score -= len(enemy_pocketed) * 20
+    score += len(own_pocketed) * 50.0
+    score -= len(enemy_pocketed) * 20.0
     
     if score == 0 and not is_foul:
-        score = 10
+        score = 10.0  # 合法无进球基础分
     
-    disturbed_8 = False
-    is_targeting_8 = (len(player_targets) == 1 and player_targets[0] == "8")
-
-    if not is_targeting_8:
-        for e in shot.events:
-            if hasattr(e, 'ids') and '8' in e.ids:
-                disturbed_8 = True
-                break
+    # ========== 第二部分：走位质量评估（BayesMCTS 专属增强）==========
     
-    if disturbed_8:
-        score -= 50.0
-
-    if not is_foul and not cue_pocketed:
+    # 只有在合法击球且母球未落袋时才评估走位
+    if is_foul or cue_pocketed:
+        return score
+    
+    final_cue_pos = shot.balls['cue'].state.rvw[0]
+    
+    # 确定下一杆目标球
+    remaining_targets = [bid for bid in player_targets if shot.balls[bid].state.s != 4]
+    if not remaining_targets:
+        remaining_targets = ['8']  # 清完己方球后打8号
+    
+    # 进球后球权延续，评估下一杆机会
+    if len(own_pocketed) > 0:
+        best_next_shot_quality = 0.0
         
-        final_cue_pos = shot.balls['cue'].state.rvw[0]
+        for tid in remaining_targets:
+            if shot.balls[tid].state.s == 4:
+                continue  # 已进袋的球跳过
+            target_pos = shot.balls[tid].state.rvw[0]
+            
+            for pid, pocket in shot.table.pockets.items():
+                quality = _calculate_shot_quality(final_cue_pos, target_pos, pocket.center)
+                best_next_shot_quality = max(best_next_shot_quality, quality)
         
-        # 判断球权是否延续：进自己的球且没犯规
-        turn_continues = (len(own_pocketed) > 0)
-        
-        # A. 确定下一杆的目标球列表
-        remaining_targets = [bid for bid in player_targets if shot.balls[bid].state.s != 4]
-        
-        # 如果打完了所有目标球，下一杆目标是黑8
-        if not remaining_targets and len(own_pocketed) > 0:
-            remaining_targets = ['8']
-            
-        # B. 评估逻辑
-        if turn_continues:
-            # === 进攻模式 ===
-            # 计算剩下的球里，哪一个最好打（Max Opportunity）
-            best_opportunity = 0.0
-
-            if remaining_targets:
-                for tid in remaining_targets:
-                    target_ball_pos = shot.balls[tid].state.rvw[0]
-                    
-                    # 遍历所有袋口，找这个球的最佳进球路线
-                    for pid, pocket in shot.table.pockets.items():
-                        quality = _calculate_shot_quality(final_cue_pos, target_ball_pos, pocket.center)
-                        if quality > best_opportunity:
-                            best_opportunity = quality
-            
-                    
-                    if tid != '8':
-                        # 将走位质量加入总分
-                        # 权重建议：走位好坏大约值 20-30 分，相当于半个进球
-                        # 这样 Agent 会在能进球的前提下，优先选择 V0 能带来高 quality 的那一杆
-                        score += best_opportunity * 10.0
-                    else:
-                        # 8号球走位权重极高！
-                        # 如果能舒服地打8号，给予更高奖励，这会迫使上一杆拼命走到这个位置
-                        score += best_opportunity * 15.0
-                    
-            
-        # else:
-            # === 防守模式 (可选) ===
-            # 如果没进球，我希望把母球停在让对手难受的位置
-            # 这需要推断对手的目标球。简单起见，假设对手要打剩下的非我方球
-            opponent_balls = [bid for bid in shot.balls if bid not in player_targets and bid != 'cue' and bid != '8' and shot.balls[bid].state.s != 4]
-            if not opponent_balls: opponent_balls = ['8']
-            
-            opponent_best_opportunity = 0.0
-            for tid in opponent_balls:
-                target_ball_pos = shot.balls[tid].state.rvw[0]
-                for pid, pocket in shot.table.pockets.items():
-                    quality = _calculate_shot_quality(final_cue_pos, target_ball_pos, pocket.center)
-                    if quality > opponent_best_opportunity:
-                        opponent_best_opportunity = quality
-            
-            # 如果留给对手的机会很好，扣分！
-            # 这会驱使 Agent 在没把握进球时，选择把球停在对手打不到的地方
-            score -= opponent_best_opportunity * 20.0
-        
+        # 走位奖励：最高 +25 分（约半个进球的价值）
+        # 这样 Agent 会在能进球的基础上，优先选择走位好的方案
+        position_bonus = best_next_shot_quality * 25.0
+        score += position_bonus
+    
     return score
 

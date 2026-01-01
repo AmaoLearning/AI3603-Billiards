@@ -1082,8 +1082,7 @@ class BayesMCTSAgent(Agent):
         super().__init__()
         
         # 搜索空间 - 扩大角度搜索范围以适应切球
-        self.pbounds = {
-            'd_V0': (-2.0, 2.0),
+        self.pbounds = {            'd_V0': (-2.0, 2.0),
             'd_phi': (-3.0, 3.0),  # 从 ±0.5 扩大到 ±3.0，关键改进！
             'theta': (0, 30),      # 限制跳球角度，减少无效搜索
             'a': (-0.2, 0.2),      # 缩小塞球范围，减少复杂度
@@ -1094,7 +1093,7 @@ class BayesMCTSAgent(Agent):
         self.INITIAL_SEARCH = 10
         self.OPT_SEARCH = 5
         self.NOISE_SAMPLES = 3  # 多次采样取平均
-        self.EARLY_STOP_SCORE = 50
+        self.EARLY_STOP_SCORE = 1000
         self.ALPHA = 1e-2
         
         # 模拟噪声（与 BasicAgentPro 保持一致）
@@ -1179,7 +1178,7 @@ class BayesMCTSAgent(Agent):
             try:
                 pt.simulate(sim_shot, inplace=True)
                 # 使用与 BasicAgentPro 相同的评估函数！
-                score = analyze_shot_for_reward(sim_shot, last_state_snapshot, my_targets)
+                score = evaluate_state(sim_shot, last_state_snapshot, my_targets)
             except:
                 score = -500.0
             
@@ -1216,7 +1215,7 @@ class BayesMCTSAgent(Agent):
             cue_ball = balls['cue']
             cue_pos = cue_ball.state.rvw[0]
             R = cue_ball.params.R
-            
+
             # ========== 开球特殊处理 ==========
             # 判断是否为开球局面：所有目标球都在台上（7个）
             is_break_shot = balls['1'].state.t == 0
