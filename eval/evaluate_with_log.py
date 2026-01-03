@@ -33,7 +33,7 @@ def _safe_agent_method(agent):
 def _build_logger(agent_a, agent_b):
     logs_dir = Path("./eval/logs")
     logs_dir.mkdir(parents=True, exist_ok=True)
-    filename = f"evaluate_{_safe_agent_method(agent_a)}_{_safe_agent_method(agent_b)}v4.log"
+    filename = f"evaluate_{_safe_agent_method(agent_a)}_{_safe_agent_method(agent_b)}v5.log"
     log_path = logs_dir / filename
     logger = logging.getLogger("evaluate")
     logger.handlers.clear()

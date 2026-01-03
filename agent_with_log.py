@@ -1082,6 +1082,7 @@ class BayesMCTSAgent(Agent):
             v4 with Noise/analyze_shot_for_reward vs BasicPro: 68.0/120.0
             v4 with Noise/evaluate_state vs BasicPro: 67.0/120.0 3h09m
             v4 with Noise/evaluate_state/more searchs: 74.0/120.0 3h48m
+            v4 with Noise/evaluate_state/more searchs/more cands/banks: 73.0/120.0 7h19m
         """
         super().__init__()
         
@@ -1098,7 +1099,7 @@ class BayesMCTSAgent(Agent):
         self.INITIAL_SEARCH = 15
         self.OPT_SEARCH = 8
         self.NOISE_SAMPLES = 3  # 多次采样取平均
-        self.EARLY_STOP_SCORE = 1000
+        self.EARLY_STOP_SCORE = 50
         self.ALPHA = 1e-2
         
         # 模拟噪声（与 BasicAgentPro 保持一致）
@@ -1112,9 +1113,9 @@ class BayesMCTSAgent(Agent):
         self.enable_noise = enable_noise
         
         # 翻袋策略相关参数
-        self.MIN_CANDIDATES = 6  # 最少候选数量，不足时添加翻袋
+        self.MIN_CANDIDATES = 5  # 最少候选数量，不足时添加翻袋
         self.BANK_CUT_ANGLE_THRESHOLD = 60  # 翻袋切角阈值（比直打更严格）
-        self.DIRECT_CUT_ANGLE_THRESHOLD = 70
+        self.DIRECT_CUT_ANGLE_THRESHOLD = 75
         
         logger.info("[BayesMCTS] (Enhanced v2) 已初始化。")
     
