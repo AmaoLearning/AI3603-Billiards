@@ -275,6 +275,29 @@ def evaluate_state(shot: pt.System, last_state: dict, player_targets: list):
         # 这样 Agent 会在能进球的基础上，优先选择走位好的方案
         position_bonus = best_next_shot_quality * 25.0
         score += position_bonus
+    else:
+        # ========== 无进球时评估对手机会 ==========
+        # 如果己方未进球，评估是否给对手留下了好球机会
+        # 对手目标球：排除己方目标球、cue、8号球后剩余的球
+        all_balls = {'1', '2', '3', '4', '5', '6', '7', '9', '10', '11', '12', '13', '14', '15'}
+        opponent_targets = [bid for bid in all_balls if bid not in player_targets and shot.balls[bid].state.s != 4]
+        
+        if opponent_targets:
+            best_opponent_quality = 0.0
+            
+            for tid in opponent_targets:
+                target_pos = shot.balls[tid].state.rvw[0]
+                
+                for pid, pocket in shot.table.pockets.items():
+                    quality = _calculate_shot_quality(final_cue_pos, target_pos, pocket.center)
+                    best_opponent_quality = max(best_opponent_quality, quality)
+            
+            # 对手好球惩罚：如果给对手留下了高质量机会，扣分
+            # 惩罚幅度：最高 -15 分（不宜过大，避免过于保守）
+            # 只有当对手机会质量 > 0.5 时才开始惩罚
+            if best_opponent_quality > 0.5:
+                opponent_penalty = (best_opponent_quality - 0.5) * 30.0  # 最高约 -15 分
+                score -= opponent_penalty
     
     return score
 

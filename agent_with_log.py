@@ -708,12 +708,13 @@ class BankAgent(Agent):
 
     def _get_table_rails(self, table):
         """获取4个库边的坐标位置"""
-        # table.w 是宽 (y轴方向), table.l 是长 (x轴方向)
-        # 假设球桌中心在 (0,0)
-        right = table.l / 2
-        left = -table.l / 2
-        top = table.w / 2
-        bottom = -table.w / 2
+        # table.w 是宽 (x轴方向), table.l 是长 (y轴方向)
+        # 球桌原点在左下角 (0,0)，中心在 (TABLE_W/2, TABLE_L/2)
+        # x 范围: [0, TABLE_W], y 范围: [0, TABLE_L]
+        left = 0
+        right = table.w  # TABLE_W = 0.9906
+        bottom = 0
+        top = table.l    # TABLE_L = 1.9812
         return {'left': left, 'right': right, 'top': top, 'bottom': bottom}
 
     def _get_virtual_pocket(self, pocket_pos, rail_name, rails):
@@ -1078,11 +1079,15 @@ class BayesMCTSAgent(Agent):
             v1 vs BasicPro: 43.0/120.0
             v2 vs Basic: 100.0/120.0
             v2 with Noise vs Basic: 106.0/120.0
+            v4 with Noise/analyze_shot_for_reward vs BasicPro: 68.0/120.0
+            v4 with Noise/evaluate_state vs BasicPro: 67.0/120.0 3h09m
+            v4 with Noise/evaluate_state/more searchs: 74.0/120.0 3h48m
         """
         super().__init__()
         
         # 搜索空间 - 扩大角度搜索范围以适应切球
-        self.pbounds = {            'd_V0': (-2.0, 2.0),
+        self.pbounds = {            
+            'd_V0': (-2.0, 2.0),
             'd_phi': (-3.0, 3.0),  # 从 ±0.5 扩大到 ±3.0，关键改进！
             'theta': (0, 30),      # 限制跳球角度，减少无效搜索
             'a': (-0.2, 0.2),      # 缩小塞球范围，减少复杂度
@@ -1090,8 +1095,8 @@ class BayesMCTSAgent(Agent):
         }
         
         # 优化参数 - 增加初始探索
-        self.INITIAL_SEARCH = 10
-        self.OPT_SEARCH = 5
+        self.INITIAL_SEARCH = 15
+        self.OPT_SEARCH = 8
         self.NOISE_SAMPLES = 3  # 多次采样取平均
         self.EARLY_STOP_SCORE = 1000
         self.ALPHA = 1e-2
@@ -1106,7 +1111,94 @@ class BayesMCTSAgent(Agent):
         }
         self.enable_noise = enable_noise
         
+        # 翻袋策略相关参数
+        self.MIN_CANDIDATES = 6  # 最少候选数量，不足时添加翻袋
+        self.BANK_CUT_ANGLE_THRESHOLD = 60  # 翻袋切角阈值（比直打更严格）
+        self.DIRECT_CUT_ANGLE_THRESHOLD = 70
+        
         logger.info("[BayesMCTS] (Enhanced v2) 已初始化。")
+    
+    def _get_table_rails(self, table):
+        """获取4个库边的坐标位置"""
+        # 使用 utils.py 中定义的常量
+        # 球桌原点在左下角 (0,0)，中心在 (TABLE_W/2, TABLE_L/2)
+        # x 范围: [0, TABLE_W], y 范围: [0, TABLE_L]
+        from utils import TABLE_W, TABLE_L
+        left = 0
+        right = TABLE_W   # 0.9906
+        bottom = 0
+        top = TABLE_L     # 1.9812
+        return {'left': left, 'right': right, 'top': top, 'bottom': bottom}
+
+    def _get_virtual_pocket(self, pocket_pos, rail_name, rails):
+        """计算虚拟袋口坐标 (镜像点)"""
+        px, py = pocket_pos[0], pocket_pos[1]
+        
+        if rail_name == 'top':   # y = top, 镜像点 y' = 2*top - y
+            return np.array([px, 2 * rails['top'] - py, 0])
+        elif rail_name == 'bottom':
+            return np.array([px, 2 * rails['bottom'] - py, 0])
+        elif rail_name == 'left': # x = left, 镜像点 x' = 2*left - x
+            return np.array([2 * rails['left'] - px, py, 0])
+        elif rail_name == 'right':
+            return np.array([2 * rails['right'] - px, py, 0])
+        return None
+    
+    def _generate_bank_candidates(self, balls, my_targets, table, cue_pos, R):
+        """生成翻袋击球候选
+        
+        参数:
+            balls: 球状态字典
+            my_targets: 目标球列表
+            table: 球桌对象
+            cue_pos: 母球位置
+            R: 球半径
+        
+        返回:
+            list: 翻袋候选列表
+        """
+        candidates = []
+        rails = self._get_table_rails(table)
+        
+        remaining_own = [bid for bid in my_targets if balls[bid].state.s != 4]
+        if not remaining_own:
+            remaining_own = ['8']
+
+        for ball_id in remaining_own:
+            obj_pos = balls[ball_id].state.rvw[0]
+            
+            # 遍历4条库边
+            for rail_name in ['top', 'bottom', 'left', 'right']:
+                for pid, pocket in table.pockets.items():
+                    # 计算虚拟袋口
+                    virtual_pos = self._get_virtual_pocket(pocket.center, rail_name, rails)
+                    if virtual_pos is None:
+                        continue
+                    
+                    # 几何计算：把虚拟袋口当做目标
+                    phi_ideal, cut_angle, dist_cue_obj = calculate_ghost_ball_params(
+                        cue_pos, obj_pos, virtual_pos, R
+                    )
+                    
+                    # 翻袋难度较大，切角阈值设低一点
+                    if abs(cut_angle) > self.BANK_CUT_ANGLE_THRESHOLD:
+                        continue
+                    
+                    # 估算总距离：母球->目标球 + 目标球->虚拟袋口
+                    dist_obj_virtual = np.linalg.norm(virtual_pos - obj_pos)
+                    total_dist = dist_cue_obj + dist_obj_virtual
+                    
+                    candidates.append({
+                        'type': 'bank',  # 标记类型
+                        'target_id': ball_id,
+                        'phi_center': phi_ideal,
+                        'cut_angle': cut_angle,
+                        'distance': total_dist,
+                        'rail': rail_name,
+                        'pocket_id': pid
+                    })
+        
+        return candidates
     
     def _create_optimizer(self, reward_function, seed):
         """创建贝叶斯优化器
@@ -1241,27 +1333,48 @@ class BayesMCTSAgent(Agent):
             candidates = []
 
             logger.info("[BayesMCTS] 正在为 Player (targets: %s) 搜索最佳击球...", remaining_own)
+            
+            # ========== 1. 生成直打候选 ==========
             for ball_id in remaining_own:
                 obj_pos = balls[ball_id].state.rvw[0]
                 for pid, pocket in table.pockets.items():
                     phi_ideal, cut_angle, dist = calculate_ghost_ball_params(cue_pos, obj_pos, pocket.center, R)
                     
                     # 放宽阈值到 80 度（与其他 Agent 一致）
-                    if abs(cut_angle) > 80: continue
+                    if abs(cut_angle) > self.DIRECT_CUT_ANGLE_THRESHOLD: continue
                     
                     candidates.append({
+                        'type': 'direct',  # 标记为直打
                         'target_id': ball_id,
                         'phi_center': phi_ideal,
                         'cut_angle': cut_angle,
                         'distance': dist
                     })
             
-            # 改进排序：降低距离权重，优先考虑切角
-            # 原公式 cut_angle + 10*dist 对远台惩罚过重
-            candidates.sort(key=lambda x: x['cut_angle'] * 1.5 + x['distance'] * 5)
+            # ========== 2. 当直打候选不足时，添加翻袋候选 ==========
+            if len(candidates) < self.MIN_CANDIDATES:
+                logger.info("[BayesMCTS] 直打候选不足 (%d < %d)，添加翻袋策略...", len(candidates), self.MIN_CANDIDATES)
+                bank_candidates = self._generate_bank_candidates(balls, remaining_own, table, cue_pos, R)
+                candidates.extend(bank_candidates)
+                logger.info("[BayesMCTS] 添加了 %d 个翻袋候选", len(bank_candidates))
+            
+            # ========== 3. 混合排序 ==========
+            # 改进排序：直打优先，降低距离权重，优先考虑切角
+            def sort_key(c):
+                # 翻袋惩罚：因为翻袋难度更大，给一定的排序惩罚
+                penalty = 0 if c.get('type', 'direct') == 'direct' else 20
+                return c['cut_angle'] * 1.5 + c['distance'] * 5 + penalty
+            
+            candidates.sort(key=sort_key)
             
             # 只取前 3 个候选，平衡速度与质量
-            top_candidates = candidates[:3]
+            top_candidates = candidates[:self.MIN_CANDIDATES]
+            
+            # 日志输出当前候选的类型分布
+            direct_count = sum(1 for c in top_candidates if c.get('type', 'direct') == 'direct')
+            bank_count = len(top_candidates) - direct_count
+            if bank_count > 0:
+                logger.info("[BayesMCTS] 最终候选: %d 直打 + %d 翻袋", direct_count, bank_count)
 
             top_action = None
             top_score = -float('inf')
