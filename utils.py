@@ -240,7 +240,7 @@ def evaluate_state(shot: pt.System, last_state: dict, player_targets: list):
         is_foul = True
         
     score += len(own_pocketed) * 50.0
-    score -= len(enemy_pocketed) * 20.0
+    score -= len(enemy_pocketed) * 50.0
     
     if score == 0 and not is_foul:
         score = 10.0  # 合法无进球基础分
