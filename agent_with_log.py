@@ -1085,7 +1085,7 @@ class BayesMCTSAgent(Agent):
             v4 with Noise/evaluate_state/more searchs/more cands/banks: 73.0/120.0 7h19m
             v5 with early stop vs BasicPro: 76.0/120.0 3h24m
             v5 with more samples/more enemy pocketed punish: 74.0/120.0 6h06m
-            v5 with more enemy pocketed punish/more foul punish:
+            v5 with more enemy pocketed punish/more foul punish: 77.0/120.0 4h11m 进黑球太多
         """
         super().__init__()
         
@@ -1102,6 +1102,7 @@ class BayesMCTSAgent(Agent):
         self.INITIAL_SEARCH = 20
         self.OPT_SEARCH = 10
         self.NOISE_SAMPLES = 3  # 多次采样取平均
+        self.NOISE_JUDGES = 5 # 对最优结果多次评估
         self.EARLY_STOP_SCORE = 50
         self.ALPHA = 1e-2
         
@@ -1237,7 +1238,7 @@ class BayesMCTSAgent(Agent):
         
         return optimizer
     
-    def _evaluate_action(self, d_V0, d_phi, theta, a, b, base_phi, base_v, balls, table, my_targets, last_state_snapshot):
+    def _evaluate_action(self, d_V0, d_phi, theta, a, b, base_phi, base_v, balls, table, my_targets, last_state_snapshot, sample_num):
         """
         带多次噪声采样的动作评估 (核心改进)
         
@@ -1250,7 +1251,7 @@ class BayesMCTSAgent(Agent):
         V0_base = np.clip(base_v + d_V0, 0.8, 7.5)
         
         # 2. 多次噪声采样
-        n_samples = self.NOISE_SAMPLES if self.enable_noise else 1
+        n_samples = sample_num if self.enable_noise else 1
         scores = []
         
         for _ in range(n_samples):
@@ -1410,7 +1411,8 @@ class BayesMCTSAgent(Agent):
                     balls=balls,             # 绑定当前球状态
                     table=table,
                     my_targets=remaining_own,
-                    last_state_snapshot=last_state_snapshot
+                    last_state_snapshot=last_state_snapshot,
+                    sample_num=self.NOISE_SAMPLES
                 )
                 
                 # 创建优化器
@@ -1435,6 +1437,20 @@ class BayesMCTSAgent(Agent):
                     'a': float(best_params['a']),
                     'b': float(best_params['b']),
                 }
+
+                best_score = self._evaluate_action(
+                    float(best_params['d_V0']),
+                    float(best_params['d_phi']),
+                    action['theta'],
+                    action['a'],
+                    action['b'],
+                    base_phi,
+                    base_v,
+                    balls,             
+                    table,
+                    remaining_own,
+                    last_state_snapshot,
+                    self.NOISE_JUDGES)
 
                 if best_score > top_score:
                     top_score = best_score
