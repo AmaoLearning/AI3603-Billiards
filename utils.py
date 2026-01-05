@@ -233,10 +233,10 @@ def evaluate_state(shot: pt.System, last_state: dict, player_targets: list):
         return 150.0 if is_legal_8 else -500.0
             
     if foul_first_hit:
-        score -= 30.0
+        score -= 50.0
         is_foul = True
     if foul_no_rail:
-        score -= 30.0
+        score -= 50.0
         is_foul = True
         
     score += len(own_pocketed) * 50.0

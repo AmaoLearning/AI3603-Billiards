@@ -1084,6 +1084,8 @@ class BayesMCTSAgent(Agent):
             v4 with Noise/evaluate_state/more searchs: 74.0/120.0 3h48m
             v4 with Noise/evaluate_state/more searchs/more cands/banks: 73.0/120.0 7h19m
             v5 with early stop vs BasicPro: 76.0/120.0 3h24m
+            v5 with more samples/more enemy pocketed punish: 74.0/120.0 6h06m
+            v5 with more enemy pocketed punish/more foul punish:
         """
         super().__init__()
         
@@ -1099,7 +1101,7 @@ class BayesMCTSAgent(Agent):
         # 优化参数 - 增加初始探索
         self.INITIAL_SEARCH = 20
         self.OPT_SEARCH = 10
-        self.NOISE_SAMPLES = 5  # 多次采样取平均
+        self.NOISE_SAMPLES = 3  # 多次采样取平均
         self.EARLY_STOP_SCORE = 50
         self.ALPHA = 1e-2
         
