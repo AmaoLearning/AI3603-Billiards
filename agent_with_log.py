@@ -1087,7 +1087,7 @@ class BayesMCTSAgent(Agent):
             v5 with more samples/more enemy pocketed punish: 74.0/120.0 6h06m
             v5 with more enemy pocketed punish/more foul punish: 77.0/120.0 4h11m 进黑球太多
             v5 with more enemy pocketed punish/more foul punish/extra tests: 85.0/120.0 5h40m
-            v6 with severe punishment on foul: 
+            v6 with severe punishment on foul: 85.0/120.0 4h17m
         """
         super().__init__()
         
@@ -1322,21 +1322,31 @@ class BayesMCTSAgent(Agent):
             is_break_shot = balls['1'].state.t == 0
             
             if is_break_shot:
-                # 开球策略：直接大力冲击球堆，不做复杂搜索
-                # 标准开球角度：瞄准1号球（球堆顶端）
-                one_pos = balls['1'].state.rvw[0]
-                dx = one_pos[0] - cue_pos[0]
-                dy = one_pos[1] - cue_pos[1]
-                phi_break = np.degrees(np.arctan2(dy, dx)) % 360
-                
-                logger.info("[BayesMCTS] 检测到开球局面，使用快速开球策略 (phi=%.1f)", phi_break)
-                return {
-                    'V0': 7.0,  # 大力开球
-                    'phi': phi_break,
-                    'theta': 0,
-                    'a': 0,
-                    'b': 0
-                }
+                if '1' in remaining_own:
+                    # 开球策略：直接大力冲击球堆，不做复杂搜索
+                    # 标准开球角度：瞄准1号球（球堆顶端）
+                    one_pos = balls['1'].state.rvw[0]
+                    dx = one_pos[0] - cue_pos[0]
+                    dy = one_pos[1] - cue_pos[1]
+                    phi_break = np.degrees(np.arctan2(dy, dx)) % 360
+                    
+                    logger.info("[BayesMCTS] 检测到开球局面，使用Solid快速开球策略 (phi=%.1f)", phi_break)
+                    return {
+                        'V0': 7.0,  # 大力开球
+                        'phi': phi_break + 0.5,
+                        'theta': 0,
+                        'a': 0.1,
+                        'b': 0
+                    }
+                else:
+                    logger.info("[BayesMCTS] 检测到开球局面，使用Stripe快速开球策略 (phi=90.0)")
+                    return {
+                        'V0': 7.0,
+                        'phi': 90.0,
+                        'theta': 0,
+                        'a': 0.1,
+                        'b': 0
+                    }
             # ====================================
             
             candidates = []
@@ -1467,7 +1477,7 @@ class BayesMCTSAgent(Agent):
                         logger.info("[BayesMCTS] 早停：找到进球方案 (score=%.1f)", best_score)
                         found_good_shot = True
 
-            if top_score < 0:  # 减少误打黑8
+            if top_score < -50:  # 减少误打黑8
                 logger.info("[BayesMCTS] 未找到好的方案 (最高分: %.2f)。使用随机动作。", top_score)
                 return self._random_action()
             
