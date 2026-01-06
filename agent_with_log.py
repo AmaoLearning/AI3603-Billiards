@@ -1086,6 +1086,8 @@ class BayesMCTSAgent(Agent):
             v5 with early stop vs BasicPro: 76.0/120.0 3h24m
             v5 with more samples/more enemy pocketed punish: 74.0/120.0 6h06m
             v5 with more enemy pocketed punish/more foul punish: 77.0/120.0 4h11m 进黑球太多
+            v5 with more enemy pocketed punish/more foul punish/extra tests: 85.0/120.0 5h40m
+            v6 with severe punishment on foul: 
         """
         super().__init__()
         
@@ -1278,6 +1280,8 @@ class BayesMCTSAgent(Agent):
                 score = evaluate_state(sim_shot, last_state_snapshot, my_targets)
             except:
                 score = -500.0
+            
+            if score <= -50: return score # 增大对犯规的惩罚力度
             
             scores.append(score)
         
