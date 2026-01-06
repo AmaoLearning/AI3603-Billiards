@@ -4,11 +4,29 @@ import os
 import sys
 parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(parent_dir)
+from argparse import ArgumentParser
 
 # 导入必要的模块
 from poolenv import PoolEnv
 from utils import set_random_seed
 from agent_with_log import BasicAgent, BasicAgentPro, NewAgent
+
+# ========== 命令行参数解析 ==========
+parser = ArgumentParser(description="台球 AI 对战评估")
+parser.add_argument(
+    "--opponent", "-o",
+    type=str,
+    choices=["basic", "pro"],
+    default="pro",
+    help="选择对手 Agent: 'basic' = BasicAgent, 'pro' = BasicAgentPro (默认: pro)"
+)
+parser.add_argument(
+    "--games", "-n",
+    type=int,
+    default=120,
+    help="对战局数 (默认: 120)"
+)
+args = parser.parse_args()
 
 # 设置随机种子，enable=True 时使用固定种子，enable=False 时使用完全随机
 # 根据需求，我们在这里统一设置随机种子，确保 agent 双方的全局击球扰动使用相同的随机状态
@@ -16,7 +34,7 @@ set_random_seed(enable=True, seed=42)
 
 env = PoolEnv()
 results = {'AGENT_A_WIN': 0, 'AGENT_B_WIN': 0, 'SAME': 0}
-n_games = 120  # 对战局数 自己测试时可以修改 扩充为120局为了减少随机带来的扰动
+n_games = args.games  # 对战局数
 
 
 
@@ -48,8 +66,15 @@ def _build_logger(agent_a, agent_b):
     logger.info("Logging to %s", log_path.as_posix())
     return logger
 
-agent_a, agent_b = BasicAgentPro(), NewAgent()
+# 根据命令行参数选择对手 Agent
+if args.opponent == "basic":
+    opponent_agent = BasicAgent()
+else:
+    opponent_agent = BasicAgentPro()
+
+agent_a, agent_b = opponent_agent, NewAgent()
 logger = _build_logger(agent_a, agent_b)
+logger.info("对手 Agent: %s, 对战局数: %d", args.opponent, n_games)
 
 players = [agent_a, agent_b]  # 用于切换先后手
 target_ball_choice = ['solid', 'solid', 'stripe', 'stripe']  # 轮换球型
