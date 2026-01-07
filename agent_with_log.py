@@ -1257,7 +1257,6 @@ class BayesMCTSAgent(Agent):
         # 2. 多次噪声采样
         n_samples = sample_num if self.enable_noise else 1
         scores = []
-        worst_score = 0
         
         for _ in range(n_samples):
             # 注入噪声（如果启用）
@@ -1285,13 +1284,19 @@ class BayesMCTSAgent(Agent):
                 score = -500.0
             
             if score <= -500: return score # 增大对犯规的惩罚力度，但是应该尤其惩罚黑8非正常进洞
-            
-            worst_score = min(worst_score, score)
 
             scores.append(score)
         
+        avg_score = np.mean(scores)
+        min_score = min(scores)
+        
         # 返回平均分（更稳健）
-        return np.mean(scores) if worst_score >= 0 else worst_score
+        if min_score < 0:
+            # 负分惩罚：平均分与最差分的加权
+            # 权重可调：更重视最差情况则增大 worst 权重
+            return avg_score * 0.6 + min_score * 0.4
+        else:
+            return avg_score
 
     def decision(self, balls=None, my_targets=None, table=None):
         """使用贝叶斯优化搜索最佳击球参数
