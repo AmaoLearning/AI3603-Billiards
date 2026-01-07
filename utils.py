@@ -238,18 +238,19 @@ def evaluate_state(shot: pt.System, last_state: dict, player_targets: list):
     if foul_no_rail:
         score -= 50.0
         is_foul = True
-        
-    score += len(own_pocketed) * 50.0
+    
     score -= len(enemy_pocketed) * 50.0
     
-    if score == 0 and not is_foul:
+    if is_foul: # 犯规时不需要考虑进己方球分数
+        return score
+        
+    score += len(own_pocketed) * 50.0
+    
+    if score == 0:
         score = 10.0  # 合法无进球基础分
     
     # ========== 第二部分：走位质量评估（BayesMCTS 专属增强）==========
     
-    # 只有在合法击球且母球未落袋时才评估走位
-    if is_foul or cue_pocketed:
-        return score
     
     final_cue_pos = shot.balls['cue'].state.rvw[0]
     

@@ -1088,6 +1088,8 @@ class BayesMCTSAgent(Agent):
             v5 with more enemy pocketed punish/more foul punish: 77.0/120.0 4h11m 进黑球太多
             v5 with more enemy pocketed punish/more foul punish/extra tests: 85.0/120.0 5h40m
             v6 with severe punishment on foul: 85.0/120.0 4h17m
+            v6 with more openninng strategy vs pro: 85.0/120.0 4h17m | vs basic: 114.0/120.0 5h26m
+            v6 with optimized punishment strategy vs pro:
         """
         super().__init__()
         
@@ -1255,6 +1257,7 @@ class BayesMCTSAgent(Agent):
         # 2. 多次噪声采样
         n_samples = sample_num if self.enable_noise else 1
         scores = []
+        worst_score = 0
         
         for _ in range(n_samples):
             # 注入噪声（如果启用）
@@ -1281,12 +1284,14 @@ class BayesMCTSAgent(Agent):
             except:
                 score = -500.0
             
-            if score <= -50: return score # 增大对犯规的惩罚力度
+            if score <= -500: return score # 增大对犯规的惩罚力度，但是应该尤其惩罚黑8非正常进洞
             
+            worst_score = min(worst_score, score)
+
             scores.append(score)
         
         # 返回平均分（更稳健）
-        return np.mean(scores)
+        return np.mean(scores) if worst_score >= 0 else worst_score
 
     def decision(self, balls=None, my_targets=None, table=None):
         """使用贝叶斯优化搜索最佳击球参数
