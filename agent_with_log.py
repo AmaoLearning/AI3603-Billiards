@@ -1089,7 +1089,9 @@ class BayesMCTSAgent(Agent):
             v5 with more enemy pocketed punish/more foul punish/extra tests: 85.0/120.0 5h40m
             v6 with severe punishment on foul: 85.0/120.0 4h17m
             v6 with more openninng strategy vs pro: 85.0/120.0 4h17m | vs basic: 114.0/120.0 5h26m
-            v6 with optimized punishment strategy vs pro:
+            v6 with optimized punishment strategy vs pro: 90.0/120.0 5h54m | vs basic: 112.0/120.0 7h04m
+            v6 with above and no sampling in Bayes vs basic: 111.0/120.0 4h16m | vs pro: 
+            v7 speed up in codes vs basic:
         """
         super().__init__()
         
@@ -1248,7 +1250,8 @@ class BayesMCTSAgent(Agent):
         
         改进点：
         1. 多次采样取平均，提高稳健性（与MCTS思想对齐）
-        2. 使用 analyze_shot_for_reward（与 BasicAgentPro 对齐）
+        2. 使用 analyze_shot_for_reward
+        3. 性能优化：减少不必要的深拷贝
         """
         # 1. 还原绝对参数
         phi_base = (base_phi + d_phi) % 360
@@ -1258,20 +1261,32 @@ class BayesMCTSAgent(Agent):
         n_samples = sample_num if self.enable_noise else 1
         scores = []
         
-        for _ in range(n_samples):
+        # 预计算噪声参数（如果启用）- 批量生成随机数更快
+        if self.enable_noise and n_samples > 1:
+            noise_V0 = np.random.normal(0, self.noise_std['V0'], n_samples)
+            noise_phi = np.random.normal(0, self.noise_std['phi'], n_samples)
+            noise_theta = np.random.normal(0, self.noise_std['theta'], n_samples)
+            noise_a = np.random.normal(0, self.noise_std['a'], n_samples)
+            noise_b = np.random.normal(0, self.noise_std['b'], n_samples)
+        
+        for i in range(n_samples):
             # 注入噪声（如果启用）
-            if self.enable_noise:
-                V0 = np.clip(V0_base + np.random.normal(0, self.noise_std['V0']), 0.5, 8.0)
-                phi = (phi_base + np.random.normal(0, self.noise_std['phi'])) % 360
-                theta_n = np.clip(theta + np.random.normal(0, self.noise_std['theta']), 0, 90)
-                a_n = np.clip(a + np.random.normal(0, self.noise_std['a']), -0.5, 0.5)
-                b_n = np.clip(b + np.random.normal(0, self.noise_std['b']), -0.5, 0.5)
+            if self.enable_noise and n_samples > 1:
+                V0 = np.clip(V0_base + noise_V0[i], 0.5, 8.0)
+                phi = (phi_base + noise_phi[i]) % 360
+                theta_n = np.clip(theta + noise_theta[i], 0, 90)
+                a_n = np.clip(a + noise_a[i], -0.5, 0.5)
+                b_n = np.clip(b + noise_b[i], -0.5, 0.5)
             else:
                 V0, phi, theta_n, a_n, b_n = V0_base, phi_base, theta, a, b
             
-            # 构建模拟环境
-            sim_balls = {bid: copy.deepcopy(ball) for bid, ball in balls.items()}
-            sim_table = copy.deepcopy(table)
+            # 构建模拟环境 - 使用更轻量的拷贝方式
+            sim_balls = {bid: copy.copy(ball) for bid, ball in balls.items()}
+            # 对球状态进行深拷贝（状态是可变的）
+            for bid in sim_balls:
+                sim_balls[bid].state = copy.deepcopy(balls[bid].state)
+            
+            sim_table = table  # table 在模拟中不会被修改，无需拷贝
             cue = pt.Cue(cue_ball_id="cue")
             sim_shot = pt.System(table=sim_table, balls=sim_balls, cue=cue)
             sim_shot.cue.set_state(V0=V0, phi=phi, theta=theta_n, a=a_n, b=b_n)
@@ -1315,8 +1330,11 @@ class BayesMCTSAgent(Agent):
             return self._random_action()
         try:
             
-            # 保存一个击球前的状态快照，用于对比
-            last_state_snapshot = {bid: copy.deepcopy(ball) for bid, ball in balls.items()}
+            # 保存一个击球前的状态快照，用于对比（只拷贝必要的状态信息）
+            last_state_snapshot = {}
+            for bid, ball in balls.items():
+                last_state_snapshot[bid] = copy.copy(ball)
+                last_state_snapshot[bid].state = copy.deepcopy(ball.state)
 
             remaining_own = [bid for bid in my_targets if balls[bid].state.s != 4]
             if len(remaining_own) == 0:
