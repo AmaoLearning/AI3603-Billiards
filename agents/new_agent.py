@@ -79,8 +79,8 @@ class BayesMCTSAgent(Agent):
         }
         
         # 优化参数 - 增加初始探索
-        self.INITIAL_SEARCH = 16
-        self.OPT_SEARCH = 8
+        self.INITIAL_SEARCH = 20
+        self.OPT_SEARCH = 10
         self.NOISE_SAMPLES = 3  # 多次采样取平均
         self.NOISE_JUDGES = 5 # 对最优结果多次评估
         self.EARLY_STOP_SCORE = 50
@@ -198,7 +198,7 @@ class BayesMCTSAgent(Agent):
         gpr = GaussianProcessRegressor(
             kernel=Matern(nu=2.5),
             alpha=self.ALPHA,
-            n_restarts_optimizer=5,
+            n_restarts_optimizer=10,
             random_state=seed
         )
         

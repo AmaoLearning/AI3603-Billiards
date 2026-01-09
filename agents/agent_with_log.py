@@ -1068,6 +1068,8 @@ class BayesMCTSAgent(Agent):
     
     def __init__(self, enable_noise=False):
         """初始化 Agent
+
+        推荐参数：其余不变，打basic时NOISE_SAMPLES=1，打pro时NOISE_SAMPLES=3
         
         参数：
             target_balls: 保留参数，暂未使用
@@ -1092,7 +1094,7 @@ class BayesMCTSAgent(Agent):
             v6 with optimized punishment strategy vs pro: 90.0/120.0 5h54m | vs basic: 112.0/120.0 7h04m
             v6 with above and no sampling in Bayes vs basic: 111.0/120.0 4h16m | vs pro: 78.0/120.0 3h37m
             v7 speed up in codes vs basic: 90.0/98.0 4h13m | vs pro: 77.0/114.0 4h14m
-            final experiment on restricting the dphi range (-0.8, 0.8): 
+            v7 with experiment on restricting the dphi range (-0.8, 0.8) vs basic: 107.0/120.0 6h37m 
         """
         super().__init__()
         
@@ -1106,8 +1108,8 @@ class BayesMCTSAgent(Agent):
         }
         
         # 优化参数 - 增加初始探索
-        self.INITIAL_SEARCH = 16
-        self.OPT_SEARCH = 8
+        self.INITIAL_SEARCH = 20
+        self.OPT_SEARCH = 10
         self.NOISE_SAMPLES = 3  # 多次采样取平均
         self.NOISE_JUDGES = 5 # 对最优结果多次评估
         self.EARLY_STOP_SCORE = 50
@@ -1225,7 +1227,7 @@ class BayesMCTSAgent(Agent):
         gpr = GaussianProcessRegressor(
             kernel=Matern(nu=2.5),
             alpha=self.ALPHA,
-            n_restarts_optimizer=5,
+            n_restarts_optimizer=10,
             random_state=seed
         )
         
