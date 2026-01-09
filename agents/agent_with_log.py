@@ -1090,8 +1090,9 @@ class BayesMCTSAgent(Agent):
             v6 with severe punishment on foul: 85.0/120.0 4h17m
             v6 with more openninng strategy vs pro: 85.0/120.0 4h17m | vs basic: 114.0/120.0 5h26m
             v6 with optimized punishment strategy vs pro: 90.0/120.0 5h54m | vs basic: 112.0/120.0 7h04m
-            v6 with above and no sampling in Bayes vs basic: 111.0/120.0 4h16m | vs pro: 
-            v7 speed up in codes vs basic:
+            v6 with above and no sampling in Bayes vs basic: 111.0/120.0 4h16m | vs pro: 78.0/120.0 3h37m
+            v7 speed up in codes vs basic: 90.0/98.0 4h13m | vs pro: 77.0/114.0 4h14m
+            final experiment on restricting the dphi range (-0.8, 0.8): 
         """
         super().__init__()
         
@@ -1105,8 +1106,8 @@ class BayesMCTSAgent(Agent):
         }
         
         # 优化参数 - 增加初始探索
-        self.INITIAL_SEARCH = 20
-        self.OPT_SEARCH = 10
+        self.INITIAL_SEARCH = 16
+        self.OPT_SEARCH = 8
         self.NOISE_SAMPLES = 3  # 多次采样取平均
         self.NOISE_JUDGES = 5 # 对最优结果多次评估
         self.EARLY_STOP_SCORE = 50
@@ -1187,7 +1188,7 @@ class BayesMCTSAgent(Agent):
                         continue
                     
                     # 几何计算：把虚拟袋口当做目标
-                    phi_ideal, cut_angle, dist_cue_obj = calculate_ghost_ball_params(
+                    phi_ideal, cut_angle, dist_cue_obj, dist_obj_virtual = calculate_ghost_ball_params(
                         cue_pos, obj_pos, virtual_pos, R
                     )
                     
@@ -1196,7 +1197,6 @@ class BayesMCTSAgent(Agent):
                         continue
                     
                     # 估算总距离：母球->目标球 + 目标球->虚拟袋口
-                    dist_obj_virtual = np.linalg.norm(virtual_pos - obj_pos)
                     total_dist = dist_cue_obj + dist_obj_virtual
                     
                     candidates.append({
@@ -1204,6 +1204,7 @@ class BayesMCTSAgent(Agent):
                         'target_id': ball_id,
                         'phi_center': phi_ideal,
                         'cut_angle': cut_angle,
+                        'dist_obj_pocket': dist_obj_virtual,  # 目标球到虚拟袋口距离
                         'distance': total_dist,
                         'rail': rail_name,
                         'pocket_id': pid
@@ -1224,7 +1225,7 @@ class BayesMCTSAgent(Agent):
         gpr = GaussianProcessRegressor(
             kernel=Matern(nu=2.5),
             alpha=self.ALPHA,
-            n_restarts_optimizer=10,
+            n_restarts_optimizer=5,
             random_state=seed
         )
         
@@ -1243,6 +1244,50 @@ class BayesMCTSAgent(Agent):
         optimizer._gp = gpr
         
         return optimizer
+    
+    def _generate_safety_shot(self, balls, my_targets):
+        """防守策略：当没有好机会时，轻轻碰一下离得最近的目标球，避免犯规
+        
+        参数:
+            balls: 球状态字典
+            my_targets: 目标球列表
+        
+        返回:
+            dict: 防守动作 {'V0', 'phi', 'theta', 'a', 'b'}
+        """
+        logger.info("[BayesMCTS] 启动防守模式 (Safety Mode)")
+        cue_pos = balls['cue'].state.rvw[0]
+        min_dist = float('inf')
+        best_target = None
+        
+        # 找最近的己方目标球
+        candidates = [bid for bid in my_targets if balls[bid].state.s != 4]
+        if not candidates:
+            candidates = ['8']  # 如果没有目标球，打8号球
+        
+        for bid in candidates:
+            obj_pos = balls[bid].state.rvw[0]
+            dist = np.linalg.norm(obj_pos[:2] - cue_pos[:2])
+            if dist < min_dist:
+                min_dist = dist
+                best_target = bid
+        
+        if best_target:
+            obj_pos = balls[best_target].state.rvw[0]
+            dx = obj_pos[0] - cue_pos[0]
+            dy = obj_pos[1] - cue_pos[1]
+            phi = np.degrees(np.arctan2(dy, dx)) % 360
+            # 轻轻碰一下，确保合法但不给对手留好球
+            V0 = max(1.0, min_dist * 1.5)
+            logger.info("[BayesMCTS] 防守: 轻触 %s 号球 (V0=%.2f, phi=%.1f)", best_target, V0, phi)
+            return {'V0': V0, 'phi': phi, 'theta': 0, 'a': 0, 'b': 0}
+        
+        # 实在找不到，返回随机动作
+        return self._random_action()
+    
+    def _random_action(self):
+        """生成随机动作（兜底用）"""
+        return {'V0': 1.0, 'phi': np.random.uniform(0, 360), 'theta': 0, 'a': 0, 'b': 0}
     
     def _evaluate_action(self, d_V0, d_phi, theta, a, b, base_phi, base_v, balls, table, my_targets, last_state_snapshot, sample_num):
         """
@@ -1385,7 +1430,7 @@ class BayesMCTSAgent(Agent):
             for ball_id in remaining_own:
                 obj_pos = balls[ball_id].state.rvw[0]
                 for pid, pocket in table.pockets.items():
-                    phi_ideal, cut_angle, dist = calculate_ghost_ball_params(cue_pos, obj_pos, pocket.center, R)
+                    phi_ideal, cut_angle, dist_cue_obj, dist_obj_pocket = calculate_ghost_ball_params(cue_pos, obj_pos, pocket.center, R)
                     
                     # 放宽阈值到 80 度（与其他 Agent 一致）
                     if abs(cut_angle) > self.DIRECT_CUT_ANGLE_THRESHOLD: continue
@@ -1395,7 +1440,8 @@ class BayesMCTSAgent(Agent):
                         'target_id': ball_id,
                         'phi_center': phi_ideal,
                         'cut_angle': cut_angle,
-                        'distance': dist
+                        'distance': dist_cue_obj,
+                        'dist_obj_pocket': dist_obj_pocket  # 新增：目标球到袋口距离
                     })
             
             # ========== 2. 当直打候选不足时，添加翻袋候选 ==========
@@ -1406,11 +1452,13 @@ class BayesMCTSAgent(Agent):
                 logger.info("[BayesMCTS] 添加了 %d 个翻袋候选", len(bank_candidates))
             
             # ========== 3. 混合排序 ==========
-            # 改进排序：直打优先，降低距离权重，优先考虑切角
+            # 改进排序：直打优先，综合考虑切角、母球距离和目标球到袋口距离
             def sort_key(c):
                 # 翻袋惩罚：因为翻袋难度更大，给一定的排序惩罚
                 penalty = 0 if c.get('type', 'direct') == 'direct' else 20
-                return c['cut_angle'] * 1.5 + c['distance'] * 5 + penalty
+                # 目标球到袋口距离：距离越远难度越大
+                dist_obj_pocket = c.get('dist_obj_pocket', 0.5)
+                return c['cut_angle'] * 1.5 + c['distance'] * 3 + dist_obj_pocket * 8 + penalty
             
             candidates.sort(key=sort_key)
             
@@ -1441,8 +1489,9 @@ class BayesMCTSAgent(Agent):
 
                 # 几何先验角度
                 base_phi = cand['phi_center']
-                # 粗略估计速度
-                base_v = 1.5 + cand['distance'] * 1.5
+                # 粗略估计速度：考虑母球到目标球距离 + 目标球到袋口距离
+                dist_obj_pocket = cand.get('dist_obj_pocket', 0.5)
+                base_v = 1.2 + cand['distance'] * 2.0 + dist_obj_pocket * 1.5
                 
                 # 使用 partial 绑定参数，确保变量隔离！
                 # 这样优化器调用的函数就只剩 (V0, d_phi, theta, a, b) 这5个参数了
@@ -1506,8 +1555,8 @@ class BayesMCTSAgent(Agent):
                         found_good_shot = True
 
             if top_score < -50:  # 减少误打黑8
-                logger.info("[BayesMCTS] 未找到好的方案 (最高分: %.2f)。使用随机动作。", top_score)
-                return self._random_action()
+                logger.info("[BayesMCTS] 未找到好的方案 (最高分: %.2f)。切换防守模式。", top_score)
+                return self._generate_safety_shot(balls, remaining_own)
             
             logger.info(
                 "[BayesMCTS] 决策 (得分: %.2f): V0=%.2f, V0_base=%.2f, phi=%.2f, phi_base=%.2f θ=%.2f, a=%.3f, b=%.3f",

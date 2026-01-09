@@ -9,7 +9,7 @@ from argparse import ArgumentParser
 # 导入必要的模块
 from poolenv import PoolEnv
 from utils import set_random_seed
-from agent_with_log import BasicAgent, BasicAgentPro, NewAgent
+from agents.agent_with_log import BasicAgent, BasicAgentPro, NewAgent
 
 # ========== 命令行参数解析 ==========
 parser = ArgumentParser(description="台球 AI 对战评估")
@@ -51,7 +51,7 @@ def _safe_agent_method(agent):
 def _build_logger(agent_a, agent_b):
     logs_dir = Path("./eval/logs")
     logs_dir.mkdir(parents=True, exist_ok=True)
-    filename = f"evaluate_{_safe_agent_method(agent_a)}_{_safe_agent_method(agent_b)}v6.log"
+    filename = f"evaluate_{_safe_agent_method(agent_a)}_{_safe_agent_method(agent_b)}Final.log"
     log_path = logs_dir / filename
     logger = logging.getLogger("evaluate")
     logger.handlers.clear()

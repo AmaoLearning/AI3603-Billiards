@@ -75,7 +75,7 @@ def calculate_ghost_ball_params(cue_pos, obj_pos, pocket_pos, R):
         cos_theta = np.dot(vec_cue_obj, vec_obj_pocket) / (norm_co * dist_obj_pocket + 1e-6)
         cut_angle = np.degrees(np.arccos(np.clip(cos_theta, -1, 1)))
         
-        return phi, cut_angle, norm_co
+        return phi, cut_angle, norm_co, dist_obj_pocket
 
 def get_pockets(table):
         return table.pockets
