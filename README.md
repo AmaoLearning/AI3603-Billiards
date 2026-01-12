@@ -1,6 +1,14 @@
 # AI3603-Billiards
 AI3603课程台球大作业
 
+## 项目使用说明
+
+`evaluate.py`直接运行即可，`eval/evaluate_with_log.py`可以带参数`-o`指定与BasicAgent（`basic`）抑或BasicAgentPro（`pro`）对战，`-n`指定对战局数。
+
+里程图：
+![progress](assets/bayes_mcts_progress.png)
+
+
 ## 关键文件说明
 
 | 文件 | 作用 | 在最终测试中是否可修改 |
@@ -14,10 +22,5 @@ AI3603课程台球大作业
 对作业内容的视频说明：
 说明.mp4：https://pan.sjtu.edu.cn/web/share/da9459405eac6252d01c249c3bcb989f
 供大家参考，以文字说明为准。
-
-`evaluate.py`直接运行即可，`eval/evaluate_with_log.py`可以带参数`-o`指定与BasicAgent（`basic`）抑或BasicAgentPro（`pro`）对战，`-n`指定对战局数。
-
-里程图：
-![progress](assets/bayes_mcts_progress.png)
 
 ---

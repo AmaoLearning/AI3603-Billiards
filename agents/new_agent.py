@@ -81,7 +81,7 @@ class BayesMCTSAgent(Agent):
         # 优化参数 - 增加初始探索
         self.INITIAL_SEARCH = 20
         self.OPT_SEARCH = 10
-        self.NOISE_SAMPLES = 3  # 多次采样取平均
+        self.NOISE_SAMPLES = 1  # 多次采样取平均
         self.NOISE_JUDGES = 5 # 对最优结果多次评估
         self.EARLY_STOP_SCORE = 50
         self.ALPHA = 1e-2
