@@ -5,6 +5,14 @@ AI3603课程台球大作业
 
 `evaluate.py`直接运行即可，`eval/evaluate_with_log.py`可以带参数`-o`指定与BasicAgent（`basic`）抑或BasicAgentPro（`pro`）对战，`-n`指定对战局数。
 
+`eval`和`train`文件夹中的其他文件对于我们的Agent和比赛无用。
+
+**Requirements:**
+
+```bash
+pip install -r requirements.txt
+```
+
 里程图：
 ![progress](assets/bayes_mcts_progress.png)
 
